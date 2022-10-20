@@ -34,7 +34,7 @@ def load_K_Rt_from_P(filename, P=None):
     pose[:3, :3] = R.transpose()
     pose[:3, 3] = (t[:3] / t[3])[:, 0]
 
-    return intrinsics, pose
+    return intrinsics, pose  # c2w
 
 
 class Dataset:
@@ -331,6 +331,7 @@ class Dataset:
             intrinsic_inv, pose, depth_intrinsic_inv = self.dynamic_paras_to_mat(img_idx, add_depth=True)
         else:
             if self.is_monocular:
+                # TODO: separate K for RGB and D?
                 intrinsic_inv = self.intrinsics_all_inv[0]
                 depth_intrinsic_inv = self.depth_intrinsics_all_inv[0]
             else:
@@ -338,11 +339,17 @@ class Dataset:
                 depth_intrinsic_inv = self.depth_intrinsics_all_inv[img_idx]
             pose = self.poses_all[img_idx]
         p = torch.matmul(intrinsic_inv[None, :3, :3], p[:, :, None]).squeeze() # batch_size, 3
+        # ray_dir under camera
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True) # batch_size, 3
+        # ray_dir under world
         rays_v = torch.matmul(pose[None, :3, :3], rays_v[:, :, None]).squeeze() # batch_size, 3
+        # vector pointing from ray_origin to surface point under camera
         p_d = depth * torch.matmul(depth_intrinsic_inv[None, :3, :3], p_d[:, :, None]).squeeze() * self.scales_all[img_idx, :] # batch_size, 3
+        # length of vector pointing from ray_origin to surface point
         rays_l = torch.linalg.norm(p_d, ord=2, dim=-1, keepdim=True) # batch_size, 1
+        # vector pointing from ray_origin to surface point under camera
         rays_s = torch.matmul(pose[None, :3, :3], p_d[:, :, None]).squeeze() # batch_size, 3
+        # ray origin under world
         rays_o = pose[None, :3, 3].expand(rays_v.shape) # batch_size, 3
         return torch.cat([rays_o, rays_v, rays_s, rays_l, color, mask[:, :1]], dim=-1) # batch_size, 14
 

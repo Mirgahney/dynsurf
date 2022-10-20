@@ -167,6 +167,7 @@ class Runner:
                 # Depth
                 if self.use_depth:
                     data = self.dataset.gen_random_rays_at_depth(image_idx, self.batch_size)
+                    # ray_origin_w, ray_dir_w, ray_o_to_surface_pts_w, len_from_ray_o_to_surface_pts, gt_rgb, gt_mask
                     rays_o, rays_d, rays_s, rays_l, true_rgb, mask = \
                         data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10], data[:, 10: 13], data[:, 13: 14]
                 else:
@@ -180,6 +181,7 @@ class Runner:
 
                 near, far = self.dataset.near_far_from_sphere(rays_o, rays_d)
 
+                # only binary values
                 if self.mask_weight > 0.0:
                     mask = (mask > 0.5).to(self.dtype)
                 else:
@@ -212,6 +214,7 @@ class Runner:
                 mask_loss = F.binary_cross_entropy(weight_sum.clip(1e-5, 1.0 - 1e-5), mask)
                 # Depth
                 if self.use_depth:
+                    # TODO: why comparing rendered depth with rays_l???
                     depth_minus = (depth_map - rays_l) * valid_depth_region
                     depth_loss = F.l1_loss(depth_minus, torch.zeros_like(depth_minus), reduction='sum') \
                                     / (valid_depth_region.sum() + 1e-5)

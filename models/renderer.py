@@ -476,7 +476,7 @@ class DeformNeuSRenderer:
 
     # Depth
     def errorondepth(self, deform_code, rays_o, rays_d, rays_s, mask, alpha_ratio=0., iter_step=0):
-        pts = rays_o + rays_s
+        pts = rays_o + rays_s  # surface_pts  [bs, 3]
         pts_canonical = self.deform_network(deform_code, pts, alpha_ratio)
         ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio)
         if iter_step % self.report_freq == 0:
