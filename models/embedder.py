@@ -64,4 +64,3 @@ def get_embedder(multires, input_dims=3):
     embedder_obj = Embedder(**embed_kwargs)
     def embed(x, alpha_ratio, eo=embedder_obj): return eo.embed(x, alpha_ratio)
     return embed, embedder_obj.out_dim
-    

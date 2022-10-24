@@ -34,7 +34,7 @@ def load_K_Rt_from_P(filename, P=None):
     pose[:3, :3] = R.transpose()
     pose[:3, 3] = (t[:3] / t[3])[:, 0]
 
-    return intrinsics, pose  # c2w
+    return intrinsics, pose
 
 
 class Dataset:
@@ -141,7 +141,6 @@ class Dataset:
 
         logging.info('Load data: End')
 
-
     # Camera
     def static_paras_to_mat(self):
         fx, fy, cx, cy = self.intrinsics_paras[:,0], self.intrinsics_paras[:,1],\
@@ -174,7 +173,6 @@ class Dataset:
                                     (zeros, zeros, zeros, ones), dim=1)[:,None,:]),
                                         dim=1)
         self.poses_all = se3.exp(self.poses_paras)
-
 
     def dynamic_paras_to_mat(self, img_idx, add_depth=False):
         if self.is_monocular:
@@ -218,7 +216,6 @@ class Dataset:
             return intrinsic_inv.squeeze(), pose.squeeze(), depth_intrinsic_inv.squeeze()
         return intrinsic_inv.squeeze(), pose.squeeze()
 
-
     def gen_rays_at(self, img_idx, resolution_level=1):
         """
         Generate rays at world space from one camera.
@@ -242,7 +239,6 @@ class Dataset:
         rays_v = torch.matmul(pose[None, None, :3, :3], rays_v[:, :, :, None]).squeeze() # W, H, 3
         rays_o = pose[None, None, :3, 3].expand(rays_v.shape) # W, H, 3
         return rays_o.transpose(0, 1), rays_v.transpose(0, 1)
-
 
     # Depth
     def gen_rays_at_depth(self, img_idx, resolution_level=1):
@@ -284,7 +280,6 @@ class Dataset:
         rays_o = pose[None, None, :3, 3].expand(rays_v.shape) # W, H, 3
         return rays_o.transpose(0,1), rays_v.transpose(0,1), rays_s.transpose(0,1), mask.transpose(0,1)
 
-
     def gen_random_rays_at(self, img_idx, batch_size):
         """
         Generate random rays at world space from one camera.
@@ -309,7 +304,6 @@ class Dataset:
         rays_o = pose[None, :3, 3].expand(rays_v.shape) # batch_size, 3
         return torch.cat([rays_o, rays_v, color, mask[:, :1]], dim=-1) # batch_size, 10
 
-
     # Depth
     def gen_random_rays_at_depth(self, img_idx, batch_size):
         """
@@ -331,7 +325,6 @@ class Dataset:
             intrinsic_inv, pose, depth_intrinsic_inv = self.dynamic_paras_to_mat(img_idx, add_depth=True)
         else:
             if self.is_monocular:
-                # TODO: separate K for RGB and D?
                 intrinsic_inv = self.intrinsics_all_inv[0]
                 depth_intrinsic_inv = self.depth_intrinsics_all_inv[0]
             else:
@@ -339,20 +332,13 @@ class Dataset:
                 depth_intrinsic_inv = self.depth_intrinsics_all_inv[img_idx]
             pose = self.poses_all[img_idx]
         p = torch.matmul(intrinsic_inv[None, :3, :3], p[:, :, None]).squeeze() # batch_size, 3
-        # ray_dir under camera
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True) # batch_size, 3
-        # ray_dir under world
         rays_v = torch.matmul(pose[None, :3, :3], rays_v[:, :, None]).squeeze() # batch_size, 3
-        # vector pointing from ray_origin to surface point under camera
         p_d = depth * torch.matmul(depth_intrinsic_inv[None, :3, :3], p_d[:, :, None]).squeeze() * self.scales_all[img_idx, :] # batch_size, 3
-        # length of vector pointing from ray_origin to surface point
         rays_l = torch.linalg.norm(p_d, ord=2, dim=-1, keepdim=True) # batch_size, 1
-        # vector pointing from ray_origin to surface point under camera
         rays_s = torch.matmul(pose[None, :3, :3], p_d[:, :, None]).squeeze() # batch_size, 3
-        # ray origin under world
         rays_o = pose[None, :3, 3].expand(rays_v.shape) # batch_size, 3
         return torch.cat([rays_o, rays_v, rays_s, rays_l, color, mask[:, :1]], dim=-1) # batch_size, 14
-
 
     def gen_rays_between(self, idx_0, idx_1, ratio, resolution_level=1):
         """
@@ -387,7 +373,6 @@ class Dataset:
         rays_o = trans[None, None, :3].expand(rays_v.shape) # W, H, 3
         return rays_o.transpose(0, 1), rays_v.transpose(0, 1)
 
-
     def near_far_from_sphere(self, rays_o, rays_d):
         a = torch.sum(rays_d**2, dim=-1, keepdim=True)
         b = 2.0 * torch.sum(rays_o * rays_d, dim=-1, keepdim=True)
@@ -396,11 +381,9 @@ class Dataset:
         far = mid + 1.0
         return near, far
 
-
     def image_at(self, idx, resolution_level):
         img = cv.imread(self.images_lis[idx])
         return (cv.resize(img, (self.W // resolution_level, self.H // resolution_level))).clip(0, 255)
-
 
     def get_image_size(self):
         return self.H, self.W
