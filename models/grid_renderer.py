@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import mcubes
-from models.rend_utils import qp_to_sdf
+from models.rend_utils import qp_to_sdf, neus_weights
 from pdb import set_trace
 
 
@@ -318,11 +318,14 @@ class DeformGoSRenderer:
 
         weights = alpha * torch.cumprod(torch.cat([torch.ones([batch_size, 1]), 1. - alpha + 1e-7], -1), -1)[:, :-1]
         weights_sum = weights.sum(dim=-1, keepdim=True)
-
+        weights_ours, _, _ = neus_weights(sdf, dists, inv_s, z_vals=None, view_dirs=dirs_o, grads=gradients_o,
+                                          cos_val=true_cos)
         # depth map
         depth_map = torch.sum(weights * mid_z_vals, -1, keepdim=True)
+        depth_map_ours = torch.sum(weights_ours * mid_z_vals, -1, keepdim=True)
 
         color = (sampled_color * weights[:, :, None]).sum(dim=1)
+        color_ours = (sampled_color * weights_ours[:, :, None]).sum(dim=1)
 
         # Eikonal loss, observation + canonical
         gradient_o_error = (torch.linalg.norm(gradients_o.reshape(batch_size, n_samples, 3), ord=2,
@@ -335,6 +338,7 @@ class DeformGoSRenderer:
             'pts_canonical': pts_canonical.reshape(batch_size, n_samples, 3),
             'relax_inside_sphere': relax_inside_sphere,
             'color': color,
+            'color_ours': color_ours,
             'sdf': sdf,
             'dists': dists,
             'gradients_o': gradients_o.reshape(batch_size, n_samples, 3),
@@ -345,7 +349,8 @@ class DeformGoSRenderer:
             'cdf': c.reshape(batch_size, n_samples),
             'gradient_o_error': gradient_o_error,
             'inside_sphere': inside_sphere,
-            'depth_map': depth_map
+            'depth_map': depth_map,
+            'depth_map_ours': depth_map_ours,
         }
 
     # TODO: modify this to work with grid
@@ -423,6 +428,7 @@ class DeformGoSRenderer:
             'pts_canonical': ret_fine['pts_canonical'],
             'relax_inside_sphere': ret_fine['relax_inside_sphere'],
             'color_fine': ret_fine['color'],
+            'color_ours': ret_fine['color_ours'],
             's_val': s_val,
             'cdf_fine': ret_fine['cdf'],
             'weight_sum': ret_fine['weights_sum'],

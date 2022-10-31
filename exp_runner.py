@@ -252,8 +252,9 @@ class Runner:
                            (geo_loss * self.geo_weight + angle_loss * self.angle_weight) * geo_scale + \
                            (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
                 else:
-                    loss = color_fine_loss + \
-                           (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
+                    #loss = color_fine_loss + \
+                    #       (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
+                    loss = (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
 
                 self.optimizer.zero_grad()
                 loss.backward()

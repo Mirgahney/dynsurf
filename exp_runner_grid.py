@@ -175,7 +175,7 @@ class Runner:
         # Backup codes and configs
         if self.mode[:5] == 'train':
             self.file_backup()
-            self.geom_init(2.1/4)
+            #self.geom_init(2.1/5)
 
     def create_feature_grid(self, fine_res, feat_dims):
         voxel_dims = []
@@ -188,21 +188,23 @@ class Runner:
         init_feat = torch.zeros(1, torch.tensor(feat_dims).sum(), device=self.device)
         return MultiGrid(voxel_dims, init_feat, feat_dims)
 
-    def geom_init(self, radius=1.5):
+    def geom_init(self, radius=1.5, chunk=500000):
         optimizer = torch.optim.Adam([
             {"params": self.sdf_network.parameters(), "lr": 1e-3},
-            #{"params": self.topo_network.parameters(), "lr": 1e-3},
+            {"params": self.topo_network.parameters(), "lr": 1e-3},
             {"params": self.feature_grid.parameters(), "lr": 5e-2},
-                                      ])
+            {"params": self.deform_codes, "lr": 1e-3},
+        ])
         center = self.volume_origin + self.volume_dim / 2.
         # TODO: radius cannot be too large! FOV must cover the sphere, and there must be enough background space
         # radius = 0.8 * self.volume_dim.min() / 2
         offset = torch.tensor([0., 0., 0.], device=self.device)
         center += offset
-        iters = 500
+        iters = 1500
         print_i = iters // 5
+        alpha_ratio = 0
 
-        for i in range(iters):
+        for j in range(iters):
             optimizer.zero_grad()
             coords = coordinates([self.feature_grid.volumes[0].shape[2],
                                   self.feature_grid.volumes[0].shape[3],
@@ -210,16 +212,27 @@ class Runner:
             voxel_size_xyz = self.volume_dim / (torch.tensor(self.feature_grid.volumes[0].shape[2:]) - 1)  # [3,]
 
             qp = (coords * voxel_size_xyz[None, :] + self.volume_origin[None, :])
-
-            sdf, *_ = qp_to_sdf(qp.unsqueeze(1), self.volume_origin, self.volume_dim, self.feature_grid,
-                                self.sdf_network, rgb_dim=self.rgb_dim)
-            #sdf = sdf.squeeze(-1)
-            sdf = sdf.squeeze(0)
+            rand_idx = torch.randint(0, self.dataset.n_images, (1,))
+            deform_code = self.deform_codes[rand_idx]
             target_sdf = (center - qp).norm(dim=-1) - radius
-            loss = torch.nn.functional.mse_loss(sdf, target_sdf)
-            loss.backward()
-            optimizer.step()
-            if i % print_i == 0:
+            n_voxels = qp.shape[0]
+            for i in range(0, n_voxels, chunk):
+                start = i
+                end = i + chunk if (i + chunk) <= n_voxels else n_voxels
+                qp_chunk = qp[start:end, :]
+                target_sdf_chunk = target_sdf[start:end]
+                ambient_coord = self.topo_network(deform_code, qp_chunk, alpha_ratio)
+
+                sdf, *_ = qp_to_sdf(qp_chunk.unsqueeze(1), self.volume_origin, self.volume_dim, self.feature_grid,
+                                    self.sdf_network, hyper_embed=ambient_coord, rgb_dim=self.rgb_dim)
+                #sdf = sdf.squeeze(-1)
+                sdf = sdf.squeeze(0)
+
+                loss = torch.nn.functional.mse_loss(sdf, target_sdf_chunk)
+                #loss = torch.nn.functional.l1_loss(sdf, target_sdf_chunk)
+                loss.backward(retain_graph=True)
+                optimizer.step()
+            if j % print_i == 0:
                 print("SDF loss: {}".format(loss.item()))
 
     def init_volume_dims(self, xyz_min, xyz_max):
@@ -243,7 +256,8 @@ class Runner:
                     print('The files will be saved in:', self.base_exp_dir)
                     print('Used GPU:', self.gpu)
                     self.validate_observation_mesh(self.validate_idx)
-                # Depth
+                    #self.validate_canonical_mesh()
+                # Deptdeviation_networkh
                 if self.use_depth:
                     data = self.dataset.gen_random_rays_at_depth(image_idx, self.batch_size)
                     rays_o, rays_d, rays_s, rays_l, true_rgb, mask = \
@@ -322,6 +336,7 @@ class Runner:
                 else:
                     loss = color_fine_loss +\
                         (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
+                    #loss = (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -446,18 +461,15 @@ class Runner:
 
                 if self.iter_step % len(image_perm) == 0:
                     image_perm = self.get_image_perm()
-
         
     def get_image_perm(self):
         return torch.randperm(self.dataset.n_images)
-
 
     def get_cos_anneal_ratio(self):
         if self.anneal_end == 0.0:
             return 1.0
         else:
             return np.min([1.0, self.iter_step / self.anneal_end])
-
 
     def update_learning_rate(self, scale_factor=1):
         if self.iter_step < self.warm_up_end:
@@ -477,7 +489,6 @@ class Runner:
             else:
                 g['lr'] = current_learning_rate
 
-
     def file_backup(self):
         dir_lis = self.conf['general.recording']
         os.makedirs(os.path.join(self.base_exp_dir, 'recording'), exist_ok=True)
@@ -491,9 +502,9 @@ class Runner:
         copyfile(self.conf_path, os.path.join(self.base_exp_dir, 'recording', 'config.conf'))
         logging.info('File Saved')
 
-
     def load_checkpoint(self, checkpoint_name):
         checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name), map_location=self.device)
+        self.feature_grid.load_state_dict(checkpoint['feature_grid']),
         self.sdf_network.load_state_dict(checkpoint['sdf_network_fine'])
         self.deviation_network.load_state_dict(checkpoint['variance_network_fine'])
         self.color_network.load_state_dict(checkpoint['color_network_fine'])
@@ -523,7 +534,6 @@ class Runner:
 
         logging.info('End')
 
-
     def save_checkpoint(self):
         # Depth
         if self.use_depth:
@@ -535,6 +545,7 @@ class Runner:
             checkpoint = {
                 'deform_network': self.deform_network.state_dict(),
                 'topo_network': self.topo_network.state_dict(),
+                'feature_grid': self.feature_grid.state_dict(),
                 'sdf_network_fine': self.sdf_network.state_dict(),
                 'variance_network_fine': self.deviation_network.state_dict(),
                 'color_network_fine': self.color_network.state_dict(),
@@ -548,6 +559,7 @@ class Runner:
             }
         else:
             checkpoint = {
+                'feature_grid': self.feature_grid.state_dict(),
                 'sdf_network_fine': self.sdf_network.state_dict(),
                 'variance_network_fine': self.deviation_network.state_dict(),
                 'color_network_fine': self.color_network.state_dict(),
@@ -560,7 +572,6 @@ class Runner:
 
         os.makedirs(os.path.join(self.base_exp_dir, 'checkpoints'), exist_ok=True)
         torch.save(checkpoint, os.path.join(self.base_exp_dir, 'checkpoints', 'ckpt_{:0>7d}.pth'.format(self.iter_step)))
-
 
     def validate_image(self, idx=-1, resolution_level=-1, mode='train', normal_filename='normals', rgb_filename='rgbs', depth_filename='depths'):
         if idx < 0:
@@ -583,6 +594,7 @@ class Runner:
         rays_d = rays_d.reshape(-1, 3).split(batch_size)
 
         out_rgb_fine = []
+        out_rgb_fine_ours = []
         out_normal_fine = []
         out_depth_fine = []
 
@@ -610,6 +622,7 @@ class Runner:
 
             if feasible('color_fine'):
                 out_rgb_fine.append(render_out['color_fine'].detach().cpu().numpy())
+                out_rgb_fine_ours.append(render_out['color_ours'].detach().cpu().numpy())
             if feasible('gradients') and feasible('weights'):
                 if self.iter_step >= self.important_begin_iter:
                     n_samples = self.renderer.n_samples + self.renderer.n_importance
@@ -626,8 +639,10 @@ class Runner:
             del render_out
 
         img_fine = None
+        img_fine_ours = None
         if len(out_rgb_fine) > 0:
             img_fine = (np.concatenate(out_rgb_fine, axis=0).reshape([H, W, 3, -1]) * 256).clip(0, 255)
+            img_fine_ours = (np.concatenate(out_rgb_fine_ours, axis=0).reshape([H, W, 3, -1]) * 256).clip(0, 255)
 
         normal_img = None
         if len(out_normal_fine) > 0:
@@ -658,6 +673,11 @@ class Runner:
                                         '{:0>8d}_{}.png'.format(self.iter_step, idx)),
                            np.concatenate([img_fine[..., i],
                                            self.dataset.image_at(idx, resolution_level=resolution_level)]))
+                cv.imwrite(os.path.join(self.base_exp_dir,
+                                        rgb_filename,
+                                        'ours{:0>8d}_{}.png'.format(self.iter_step, idx)),
+                           np.concatenate([img_fine_ours[..., i],
+                                           self.dataset.image_at(idx, resolution_level=resolution_level)]))
             if len(out_normal_fine) > 0:
                 cv.imwrite(os.path.join(self.base_exp_dir,
                                         normal_filename,
@@ -675,7 +695,6 @@ class Runner:
                     cv.imwrite(os.path.join(self.base_exp_dir, depth_filename,
                                             '{:0>8d}_{}.png'.format(self.iter_step, idx)),
                                             cv.applyColorMap(depth_img[..., i], cv.COLORMAP_JET))
-
 
     def validate_image_with_depth(self, idx=-1, resolution_level=-1, mode='train'):
         if idx < 0:
@@ -775,6 +794,7 @@ class Runner:
 
     # Deform
     def validate_canonical_mesh(self, world_space=False, resolution=64, threshold=0.0, filename='meshes_canonical'):
+        print('extract canonical mesh')
         bound_min = torch.tensor(self.dataset.object_bbox_min, dtype=self.dtype)
         bound_max = torch.tensor(self.dataset.object_bbox_max, dtype=self.dtype)
         

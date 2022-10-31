@@ -283,7 +283,10 @@ def qp_to_sdf(pts, volume_origin, volume_dim, feat_volume, sdf_decoder, hyper_em
 
         if hyper_embed is not None:
             if len(features.shape) == 3:
-                hyper_embed = hyper_embed.unsqueeze(0)
+                if features.shape[1] == 1:
+                    hyper_embed = hyper_embed.unsqueeze(1)
+                else:
+                    hyper_embed = hyper_embed.unsqueeze(0)
             features = torch.cat((features, hyper_embed), dim=-1)
         if temp_lat_feat is not None:
             raw = sdf_decoder(features, temp_lat_feat)
@@ -301,8 +304,8 @@ def neus_weights(sdf, dists, inv_s, z_vals=None, view_dirs=None, grads=None, cos
         cos_val = -(F.relu(-cos_val * 0.5 + 0.5) * (1.0 - cos_anneal_ratio) +
                     F.relu(-cos_val) * cos_anneal_ratio)
 
-    estimated_next_sdf = sdf + cos_val * dists * 0.5
-    estimated_prev_sdf = sdf - cos_val * dists * 0.5
+    estimated_next_sdf = sdf + cos_val * dists.reshape(-1, 1) * 0.5
+    estimated_prev_sdf = sdf - cos_val * dists.reshape(-1, 1) * 0.5
 
     prev_cdf = torch.sigmoid(estimated_prev_sdf * inv_s)
     next_cdf = torch.sigmoid(estimated_next_sdf * inv_s)
@@ -310,8 +313,9 @@ def neus_weights(sdf, dists, inv_s, z_vals=None, view_dirs=None, grads=None, cos
     p = prev_cdf - next_cdf
     c = prev_cdf
 
-    alpha = ((p + 1e-5) / (c + 1e-5)).clip(0.0, 1.0)
-    acc_trans = torch.cumprod(torch.cat([torch.ones([sdf.shape[0], 1], device=alpha.device), 1. - alpha + 1e-7], -1), -1)[:, :-1]
+    alpha = ((p + 1e-5) / (c + 1e-5)).reshape(1024, 32).clip(0.0, 1.0)
+    #acc_trans = torch.cumprod(torch.cat([torch.ones([sdf.shape[0], 1], device=alpha.device), 1. - alpha + 1e-7], -1), -1)[:, :-1]
+    acc_trans = torch.cumprod(torch.cat([torch.ones([1024, 1]), 1. - alpha + 1e-7], -1), -1)[:, :-1]
     weights = alpha * acc_trans
     trans = acc_trans[:, -1]
 
