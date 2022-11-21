@@ -244,7 +244,7 @@ def from_grid_sample(feat_pts):
 from pdb import set_trace
 
 def qp_to_sdf(pts, volume_origin, volume_dim, feat_volume, sdf_decoder, hyper_embed=None, sdf_act=nn.Identity(),
-              concat_qp=False,  rgb_dim=8, use_mask=False, temp_lat_feat=None):
+              concat_qp=False,  rgb_dim=8, use_mask=False, temp_lat_feat=None, use_pts=False):
     pts_norm = 2. * (pts - volume_origin[None, None, :]) / volume_dim[None, None, :] - 1.
     mask = (pts_norm.abs() <= 1.)[...,:2].all(dim=-1)
     #set_trace()
@@ -261,14 +261,21 @@ def qp_to_sdf(pts, volume_origin, volume_dim, feat_volume, sdf_decoder, hyper_em
 
         features = torch.cat(inputs, dim=1)
 
-        if hyper_embed is not None:
-            features = torch.cat((features, hyper_embed), dim=-1)
+        if use_pts:
+            raw = sdf_decoder(hyper_embed, pts, features.squeeze(0).squeeze(1).squeeze(1).t(), )
+            sdf = torch.zeros_like(mask, dtype=pts_norm.dtype)
+            sdf[mask] = sdf_act(raw[..., 0])
 
-        raw = sdf_decoder(features.squeeze(0).squeeze(1).squeeze(1).t())
-        sdf = torch.zeros_like(mask, dtype=pts_norm.dtype)
-        sdf[mask] = sdf_act(raw[..., 0])
+            return sdf, rgb_feat, mask
+        else:
+            if hyper_embed is not None:
+                features = torch.cat((features, hyper_embed), dim=-1)
 
-        return sdf, rgb_feat, mask
+            raw = sdf_decoder(features.squeeze(0).squeeze(1).squeeze(1).t())
+            sdf = torch.zeros_like(mask, dtype=pts_norm.dtype)
+            sdf[mask] = sdf_act(raw[..., 0])
+
+            return sdf, rgb_feat, mask
     else:
         pts_norm = pts_norm.unsqueeze(0).unsqueeze(0)  # [1, 1, n_rays, n_samples, 3]
         feat_pts = feat_volume(pts_norm[..., [2, 1, 0]], concat=False)  # [1, feat_dim, 1, n_rays, n_samples]
@@ -280,24 +287,30 @@ def qp_to_sdf(pts, volume_origin, volume_dim, feat_volume, sdf_decoder, hyper_em
             inputs.append(pts_norm.permute(0, 4, 1, 2, 3))
 
         features = from_grid_sample(torch.cat(inputs, dim=1))
+        if use_pts:
+            raw = sdf_decoder(hyper_embed, pts, features.squeeze(0).squeeze(1).squeeze(1).t())
+            sdf = sdf_act(raw)
 
-        if hyper_embed is not None:
-            if len(features.shape) == 3:
-                if features.shape[1] == 1:
-                    hyper_embed = hyper_embed.unsqueeze(1)
-                else:
-                    hyper_embed = hyper_embed.unsqueeze(0)
-            features = torch.cat((features, hyper_embed), dim=-1)
-        if temp_lat_feat is not None:
-            raw = sdf_decoder(features, temp_lat_feat)
+            return sdf, rgb_feat, mask
         else:
-            raw = sdf_decoder(features)
-        sdf = sdf_act(raw[..., 0])
-        # TODO: why the sdf net is flipping dimension
-        return sdf.t(), rgb_feat, mask
+            if hyper_embed is not None:
+                if len(features.shape) == 3:
+                    if features.shape[1] == 1:
+                        hyper_embed = hyper_embed.unsqueeze(1)
+                    else:
+                        hyper_embed = hyper_embed.unsqueeze(0)
+                features = torch.cat((features, hyper_embed), dim=-1)
+            if temp_lat_feat is not None:
+                raw = sdf_decoder(features, temp_lat_feat)
+            else:
+                raw = sdf_decoder(features)
+            sdf = sdf_act(raw[..., 0])
+            # TODO: why the sdf net is flipping dimension
+            return sdf.t(), rgb_feat, mask
 
 
-def neus_weights(sdf, dists, inv_s, z_vals=None, view_dirs=None, grads=None, cos_val=None, cos_anneal_ratio=0.):
+def neus_weights(sdf, dists, inv_s, z_vals=None, view_dirs=None, grads=None, cos_val=None, cos_anneal_ratio=0.,
+                 batch_size=1024, n_samples=32):
     if cos_val is None:
         cos_val = (view_dirs * grads).sum(-1)
         # cos_val = -F.relu(-cos_val)
@@ -313,9 +326,9 @@ def neus_weights(sdf, dists, inv_s, z_vals=None, view_dirs=None, grads=None, cos
     p = prev_cdf - next_cdf
     c = prev_cdf
 
-    alpha = ((p + 1e-5) / (c + 1e-5)).reshape(1024, 32).clip(0.0, 1.0)
+    alpha = ((p + 1e-5) / (c + 1e-5)).reshape(batch_size, n_samples).clip(0.0, 1.0)
     #acc_trans = torch.cumprod(torch.cat([torch.ones([sdf.shape[0], 1], device=alpha.device), 1. - alpha + 1e-7], -1), -1)[:, :-1]
-    acc_trans = torch.cumprod(torch.cat([torch.ones([1024, 1]), 1. - alpha + 1e-7], -1), -1)[:, :-1]
+    acc_trans = torch.cumprod(torch.cat([torch.ones([batch_size, 1]), 1. - alpha + 1e-7], -1), -1)[:, :-1]
     weights = alpha * acc_trans
     trans = acc_trans[:, -1]
 
@@ -328,6 +341,41 @@ def neus_weights(sdf, dists, inv_s, z_vals=None, view_dirs=None, grads=None, cos
         return weights, z_surf, alpha, trans
 
     return weights, alpha, trans
+
+
+def get_sdf_loss(z_vals, target_d, predicted_sdf, truncation, back_truncation=0.01, inside_masksphere=None):
+
+    if inside_masksphere is not None:
+        #sdf_mask *= inside_masksphere
+        predicted_sdf = predicted_sdf * inside_masksphere
+        z_vals = z_vals * inside_masksphere
+        target_d = target_d * inside_masksphere
+
+    depth_mask = target_d > 0.
+    front_mask = (z_vals < (target_d - truncation))
+    max_d = target_d.max()
+    #back_trucation_add = (max_d - (target_d  & depth_mask)) + back_truncation
+    back_trucation_add = back_truncation
+    back_mask = (z_vals > (target_d + back_trucation_add)) & depth_mask
+    front_mask = (front_mask | ((target_d < 0.) & (z_vals < 3.5)))
+    bound = (target_d - z_vals)
+    bound[target_d[:, 0] < 0., :] = 10.  # TODO: maybe use noisy depth for bound?
+    sdf_mask = (bound.abs() <= truncation) & depth_mask
+
+    sum_of_samples = front_mask.sum(dim=-1) + sdf_mask.sum(dim=-1) + 1e-8
+    # rays_w_depth = torch.count_nonzero(target_d)
+    # fs_loss = (torch.max(torch.exp(-5. * predicted_sdf) - 1., predicted_sdf - bound).clamp(min=0.) * front_mask)
+    # fs_loss = (fs_loss.sum(dim=-1) / sum_of_samples).sum() / rays_w_depth
+    # sdf_loss = ((torch.abs(predicted_sdf - bound) * sdf_mask).sum(dim=-1) / sum_of_samples).sum() / rays_w_depth
+
+    back_fs_samples = back_mask.sum(dim=-1) + 1e-8
+    front_fs_loss = (torch.max(torch.exp(-5. * predicted_sdf) - 1., predicted_sdf - bound).clamp(min=0.) * front_mask).sum(dim=-1) / sum_of_samples
+    psi_b = 0.6 #*torch.exp(-25. * (z_vals - back_truncation*torch.ones_like(z_vals))**2)
+    back_fs_loss = (torch.max(torch.exp(-5. * predicted_sdf) - psi_b, torch.zeros_like(predicted_sdf)).clamp(min=0.) * back_mask).sum(dim=-1) / back_fs_samples
+    fs_loss = front_fs_loss + back_fs_loss
+    sdf_loss = (torch.abs(predicted_sdf - bound) * sdf_mask).sum(dim=-1) / sum_of_samples
+
+    return fs_loss, sdf_loss
 
 
 def apply_log_transform(tsdf):
@@ -343,27 +391,6 @@ def compute_grads(predicted_sdf, query_points):
     sdf_grad, = torch.autograd.grad([predicted_sdf], [query_points], [torch.ones_like(predicted_sdf)], create_graph=True)
     # feat_volume.requires_grad_(True)
     return sdf_grad
-
-
-def get_sdf_loss(z_vals, target_d, predicted_sdf, truncation):
-    depth_mask = target_d > 0.
-    front_mask = (z_vals < (target_d - truncation))
-    # bask_mask = (z_vals > (target_d + truncation)) & depth_mask
-    front_mask = (front_mask | ((target_d < 0.) & (z_vals < 3.5)))
-    bound = (target_d - z_vals)
-    bound[target_d[:, 0] < 0., :] = 10.  # TODO: maybe use noisy depth for bound?
-    sdf_mask = (bound.abs() <= truncation) & depth_mask
-
-    sum_of_samples = front_mask.sum(dim=-1) + sdf_mask.sum(dim=-1) + 1e-8
-    # rays_w_depth = torch.count_nonzero(target_d)
-    # fs_loss = (torch.max(torch.exp(-5. * predicted_sdf) - 1., predicted_sdf - bound).clamp(min=0.) * front_mask)
-    # fs_loss = (fs_loss.sum(dim=-1) / sum_of_samples).sum() / rays_w_depth
-    # sdf_loss = ((torch.abs(predicted_sdf - bound) * sdf_mask).sum(dim=-1) / sum_of_samples).sum() / rays_w_depth
-
-    fs_loss = (torch.max(torch.exp(-5. * predicted_sdf) - 1., predicted_sdf - bound).clamp(min=0.) * front_mask).sum(dim=-1) / sum_of_samples
-    sdf_loss = (torch.abs(predicted_sdf - bound) * sdf_mask).sum(dim=-1) / sum_of_samples
-
-    return fs_loss, sdf_loss
 
 
 def sample_pdf(bins, weights, N_importance, det=False, eps=1e-5):

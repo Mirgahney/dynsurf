@@ -50,6 +50,7 @@ class Runner:
         # Training parameters
         self.end_iter = self.conf.get_int('train.end_iter')
         self.important_begin_iter = self.conf.get_int('model.neus_renderer.important_begin_iter')
+        self.sample_sequential = self.conf.get_int('train.sample_sequential')
         # Anneal
         self.max_pe_iter = self.conf.get_int('train.max_pe_iter')
 
@@ -163,7 +164,7 @@ class Runner:
         self.writer = SummaryWriter(log_dir=os.path.join(self.base_exp_dir, 'logs'))
         self.update_learning_rate()
         res_step = self.end_iter - self.iter_step
-        image_perm = self.get_image_perm()
+        image_perm = self.get_image_perm(self.sample_sequential)
 
         for iter_i in tqdm(range(res_step)):
             # Deform
@@ -305,7 +306,7 @@ class Runner:
                 self.update_learning_rate()
 
                 if self.iter_step % len(image_perm) == 0:
-                    image_perm = self.get_image_perm()
+                    image_perm = self.get_image_perm(self.sample_sequential)
 
             else:
                 if self.iter_step == 0:
@@ -381,10 +382,13 @@ class Runner:
                 self.update_learning_rate()
 
                 if self.iter_step % len(image_perm) == 0:
-                    image_perm = self.get_image_perm()
+                    image_perm = self.get_image_perm(self.sample_sequential)
 
-    def get_image_perm(self):
-        return torch.randperm(self.dataset.n_images)
+    def get_image_perm(self, sequential:bool=False):
+        if sequential:
+            return torch.arange(0, self.dataset.n_loaded_images)
+        else:
+            return torch.randperm(self.dataset.n_loaded_images)
 
     def get_cos_anneal_ratio(self):
         if self.anneal_end == 0.0:
