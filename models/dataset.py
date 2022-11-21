@@ -55,37 +55,50 @@ class Dataset:
 
         self.camera_outside_sphere = conf.get_bool('camera_outside_sphere', default=True)
         self.scale_mat_scale = conf.get_float('scale_mat_scale', default=1.1)
+        self.trainskip = conf['trainskip']
+        self.max_length = conf['max_length']
 
         camera_dict = np.load(os.path.join(self.data_dir, self.render_cameras_name))
         self.camera_dict = camera_dict
-        self.images_lis = sorted(glob(os.path.join(self.data_dir, 'rgb/*.jpg')))
+        self.images_lis = sorted(glob(os.path.join(self.data_dir, 'rgb/*.jpg')))[:self.max_length]
         if len(self.images_lis) == 0:
-            self.images_lis = sorted(glob(os.path.join(self.data_dir, 'rgb/*.png')))
+            self.images_lis = sorted(glob(os.path.join(self.data_dir, 'rgb/*.png')))[:self.max_length]
         self.n_images = len(self.images_lis)
-        self.images_np = np.stack([cv.imread(im_name) for im_name in self.images_lis]) / 256.0
-        self.masks_lis = sorted(glob(os.path.join(self.data_dir, 'mask/*.jpg')))
+        #self.images_np = np.stack([cv.imread(im_name) for im_name in self.images_lis]) / 256.0
+        self.images_np = np.stack([cv.imread(self.images_lis[im_idx]) for im_idx in
+                                   range(0, len(self.images_lis), self.trainskip)]) / 256.0
+        self.n_loaded_images = len(self.images_np)
+        self.masks_lis = sorted(glob(os.path.join(self.data_dir, 'mask/*.jpg')))[:self.max_length]
         if len(self.masks_lis) == 0:
-            self.masks_lis = sorted(glob(os.path.join(self.data_dir, 'mask/*.png')))
-        self.masks_np = np.stack([cv.imread(im_name) for im_name in self.masks_lis]) / 256.0
+            self.masks_lis = sorted(glob(os.path.join(self.data_dir, 'mask/*.png')))[:self.max_length]
+        #self.masks_np = np.stack([cv.imread(im_name) for im_name in self.masks_lis]) / 256.0
+        self.masks_np = np.stack([cv.imread(self.masks_lis[im_idx]) for im_idx in
+                                  range(0, len(self.masks_lis), self.trainskip)]) / 256.0
 
         # Depth
         self.use_depth = conf.get_bool('use_depth')
         if self.use_depth:
             self.depth_scale = conf.get_float('depth_scale', default=1000.)
-            self.depths_lis = sorted(glob(os.path.join(self.data_dir, 'depth/*.jpg')))
+            self.depths_lis = sorted(glob(os.path.join(self.data_dir, 'depth/*.jpg')))[:self.max_length]
             if len(self.depths_lis) == 0:
-                self.depths_lis = sorted(glob(os.path.join(self.data_dir, 'depth/*.png')))
-            self.depths_np = np.stack([cv.imread(im_name, cv.IMREAD_UNCHANGED) for im_name in self.depths_lis]) / self.depth_scale
+                self.depths_lis = sorted(glob(os.path.join(self.data_dir, 'depth/*.png')))[:self.max_length]
+            #self.depths_np = np.stack([cv.imread(im_name, cv.IMREAD_UNCHANGED) for im_name in self.depths_lis]) / self.depth_scale
+            self.depths_np = np.stack([cv.imread(self.depths_lis[im_idx], cv.IMREAD_UNCHANGED) for im_idx in
+                                       range(0, len(self.depths_lis), self.trainskip)]) / self.depth_scale
             self.depths_np[self.depths_np == 0] = -1. # avoid nan values
             self.depths = torch.from_numpy(self.depths_np.astype(np.float32)).to(self.dtype).cpu()
 
         # world_mat is a projection matrix from world to image
-        self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
+        #self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
+        self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in
+                              range(0, self.n_images, self.trainskip)]
 
         self.scale_mats_np = []
 
         # scale_mat: used for coordinate normalization, we assume the scene to render is inside a unit sphere at origin.
-        self.scale_mats_np = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
+        #self.scale_mats_np = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
+        self.scale_mats_np = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in
+                              range(0, self.n_images, self.trainskip)]
 
         intrinsics_all = []
         poses_all = []
