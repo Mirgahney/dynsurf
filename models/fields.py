@@ -6,7 +6,7 @@ from kornia.geometry.conversions import quaternion_log_to_exp
 from models.geometry_utils import rotate_points_with_quaternions
 from itertools import chain
 from scipy.sparse import coo_matrix
-#import tinycudann as tcnn
+import tinycudann as tcnn
 from pdb import set_trace
 
 
@@ -265,7 +265,8 @@ class DeformNetwork(nn.Module):
                  n_layers,
                  skip_in=(4,),
                  multires=0,
-                 weight_norm=True):
+                 weight_norm=True,
+                 tiny_config=None):
         super(DeformNetwork, self).__init__()
 
         self.n_blocks = n_blocks
@@ -279,7 +280,14 @@ class DeformNetwork(nn.Module):
 
         self.embed_fn_1 = None
 
-        if multires > 0:
+        if tiny_config is not None:
+            self.encoding_1 = tcnn.Encoding(dims_in, tiny_config["encoding"])
+            input_ch = self.encoding_1.n_output_dims
+            self.embed_fn_1 = lambda x, a: self.encoding_1(x)
+            dims_in = input_ch#//2 * 3
+            dims[0] = input_ch + d_feature
+
+        elif multires > 0:
             embed_fn, input_ch = get_embedder(multires, input_dims=dims_in)
             self.embed_fn_1 = embed_fn
             dims_in = input_ch
@@ -323,7 +331,14 @@ class DeformNetwork(nn.Module):
 
         self.embed_fn_2 = None
 
-        if multires > 0:
+        if tiny_config is not None:
+            self.encoding_2 = tcnn.Encoding(dims_in, tiny_config["encoding"])
+            input_ch = self.encoding_2.n_output_dims
+            self.embed_fn_2 = lambda x, a: self.encoding_2(x)
+            dims_in = input_ch#//2 * 3
+            dims[0] = input_ch + d_feature
+
+        elif multires > 0:
             embed_fn, input_ch = get_embedder(multires, input_dims=dims_in)
             self.embed_fn_2 = embed_fn
             dims_in = input_ch
@@ -1494,8 +1509,8 @@ class TinyGeomeryNetwork(nn.Module):
         n_input_dims = d_in_1 + d_in_2 + 3
 
         # Option 2: separate modules. Slower but more flexible.
-        #self.encoding = tcnn.Encoding(3, tiny_config["encoding"])
-        #n_input_dims += (self.encoding.n_output_dims - 3)
+        self.encoding = tcnn.Encoding(3, tiny_config["encoding"])
+        n_input_dims += (self.encoding.n_output_dims - 3)
 
         self.embedpts_fn = None
         if multires > 0:
@@ -1516,7 +1531,7 @@ class TinyGeomeryNetwork(nn.Module):
         pts_shape = points.shape
         if len(pts_shape) == 3:
             points = points[:, 0, :]
-        #points = self.encoding(points)
+        points = self.encoding(points)
         if self.embedpts_fn:
             points = self.embedpts_fn(points, 1.)
         x = torch.cat([points,  feature_vectors.t(), global_feature], dim=-1)
@@ -1766,19 +1781,19 @@ class GeometryNet(nn.Module):
                 in_dim = W
 
             if l != D:
-                layer = DenseLayer(in_dim, out_dim)
+                layer = DenseLayer(in_dim, out_dim, lnorm=weight_norm)
             else:
                 layer = nn.Linear(in_dim, out_dim)
 
-            if weight_norm:
-                layer = nn.utils.weight_norm(layer)
+            #if weight_norm:
+            #    layer = nn.utils.weight_norm(layer)
 
             layers.append(layer)
 
         self.layers = nn.ModuleList(layers)
 
     def forward(self, feat, t=None):
-        feat_input = self.embed_fn(feat, self.n_freq)
+        feat_input = self.embed_fn(feat, 1.0)
         h = feat_input
 
         for i in range(self.D + 1):
