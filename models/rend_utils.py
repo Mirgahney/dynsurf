@@ -3,11 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-img2mse = lambda x, y: torch.square(x - y).mean()
-img2mae = lambda x, y: torch.abs(x - y) #.mean()
-mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.])).to(x)
-
-
 def coordinates(voxel_dim, device: torch.device):
     nx, ny, nz = voxel_dim[0], voxel_dim[1], voxel_dim[2]
     x = torch.arange(0, nx, dtype=torch.long, device=device)
@@ -217,6 +212,9 @@ def render_rays(sdf_decoder,
     return ret
 
 
+mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.])).to(x)
+
+
 def get_pts_in_frustum(points, c2w, K, H, W):
     """
     :param points: [N, 3] points in world coordinates
@@ -246,7 +244,7 @@ def from_grid_sample(feat_pts):
 from pdb import set_trace
 
 def qp_to_sdf(pts, volume_origin, volume_dim, feat_volume, sdf_decoder, hyper_embed=None, sdf_act=nn.Identity(),
-              concat_qp=False,  rgb_dim=8, use_mask=False, temp_lat_feat=None, use_pts=False):
+              concat_qp=False,  rgb_dim=8, use_mask=False, temp_lat_feat=None):
     pts_norm = 2. * (pts - volume_origin[None, None, :]) / volume_dim[None, None, :] - 1.
     mask = (pts_norm.abs() <= 1.)[...,:2].all(dim=-1)
     #set_trace()
@@ -263,21 +261,14 @@ def qp_to_sdf(pts, volume_origin, volume_dim, feat_volume, sdf_decoder, hyper_em
 
         features = torch.cat(inputs, dim=1)
 
-        if use_pts:
-            raw = sdf_decoder(hyper_embed, pts, features.squeeze(0).squeeze(1).squeeze(1).t(), )
-            sdf = torch.zeros_like(mask, dtype=pts_norm.dtype)
-            sdf[mask] = sdf_act(raw[..., 0])
+        if hyper_embed is not None:
+            features = torch.cat((features, hyper_embed), dim=-1)
 
-            return sdf, rgb_feat, mask
-        else:
-            if hyper_embed is not None:
-                features = torch.cat((features, hyper_embed), dim=-1)
+        raw = sdf_decoder(features.squeeze(0).squeeze(1).squeeze(1).t())
+        sdf = torch.zeros_like(mask, dtype=pts_norm.dtype)
+        sdf[mask] = sdf_act(raw[..., 0])
 
-            raw = sdf_decoder(features.squeeze(0).squeeze(1).squeeze(1).t())
-            sdf = torch.zeros_like(mask, dtype=pts_norm.dtype)
-            sdf[mask] = sdf_act(raw[..., 0])
-
-            return sdf, rgb_feat, mask
+        return sdf, rgb_feat, mask
     else:
         pts_norm = pts_norm.unsqueeze(0).unsqueeze(0)  # [1, 1, n_rays, n_samples, 3]
         feat_pts = feat_volume(pts_norm[..., [2, 1, 0]], concat=False)  # [1, feat_dim, 1, n_rays, n_samples]
@@ -289,26 +280,21 @@ def qp_to_sdf(pts, volume_origin, volume_dim, feat_volume, sdf_decoder, hyper_em
             inputs.append(pts_norm.permute(0, 4, 1, 2, 3))
 
         features = from_grid_sample(torch.cat(inputs, dim=1))
-        if use_pts:
-            raw = sdf_decoder(hyper_embed, pts, features.squeeze(0).squeeze(1).squeeze(1).t())
-            sdf = sdf_act(raw)
 
-            return sdf, rgb_feat, mask
+        if hyper_embed is not None:
+            if len(features.shape) == 3:
+                if features.shape[1] == 1:
+                    hyper_embed = hyper_embed.unsqueeze(1)
+                else:
+                    hyper_embed = hyper_embed.unsqueeze(0)
+            features = torch.cat((features, hyper_embed), dim=-1)
+        if temp_lat_feat is not None:
+            raw = sdf_decoder(features, temp_lat_feat)
         else:
-            if hyper_embed is not None:
-                if len(features.shape) == 3:
-                    if features.shape[1] == 1:
-                        hyper_embed = hyper_embed.unsqueeze(1)
-                    else:
-                        hyper_embed = hyper_embed.unsqueeze(0)
-                features = torch.cat((features, hyper_embed), dim=-1)
-            if temp_lat_feat is not None:
-                raw = sdf_decoder(features, temp_lat_feat)
-            else:
-                raw = sdf_decoder(features)
-            sdf = sdf_act(raw[..., 0])
-            # TODO: why the sdf net is flipping dimension
-            return sdf.t(), rgb_feat, mask
+            raw = sdf_decoder(features)
+        sdf = sdf_act(raw[..., 0])
+        # TODO: why the sdf net is flipping dimension
+        return sdf.t(), rgb_feat, mask
 
 
 def neus_weights(sdf, dists, inv_s, z_vals=None, view_dirs=None, grads=None, cos_val=None, cos_anneal_ratio=0.,
@@ -335,17 +321,17 @@ def neus_weights(sdf, dists, inv_s, z_vals=None, view_dirs=None, grads=None, cos
     trans = acc_trans[:, -1]
 
     if z_vals is not None:
-        signs = sdf[1:, :] * sdf[:-1, :]
+        signs = sdf[:, 1:] * sdf[:, :-1]
         mask = torch.where(signs < 0., torch.ones_like(signs), torch.zeros_like(signs))
         # This will only return the first zero-crossing
         inds = torch.argmax(mask, dim=1, keepdim=True)
-        z_surf = torch.gather(z_vals.reshape(-1, 1), 0, inds)
+        z_surf = torch.gather(z_vals, 1, inds)
         return weights, z_surf, alpha, trans
 
     return weights, alpha, trans
 
 
-def get_sdf_loss(z_vals, target_d, predicted_sdf, mask, truncation, back_truncation=0.01, inside_masksphere=None):
+def get_sdf_loss(z_vals, target_d, predicted_sdf, truncation, back_truncation=0.01, inside_masksphere=None):
 
     if inside_masksphere is not None:
         #sdf_mask *= inside_masksphere
@@ -355,12 +341,8 @@ def get_sdf_loss(z_vals, target_d, predicted_sdf, mask, truncation, back_truncat
 
     depth_mask = target_d > 0.
     front_mask = (z_vals < (target_d - truncation))
-    max_d = target_d.max()
-    #back_trucation_add = (max_d - (target_d  & depth_mask)) + back_truncation
-    back_trucation_add = back_truncation
-    back_mask = (z_vals > (target_d + back_trucation_add)) & depth_mask
+    back_mask = (z_vals > (target_d + back_truncation)) & depth_mask
     front_mask = (front_mask | ((target_d < 0.) & (z_vals < 3.5)))
-    front_mask = (front_mask * mask)
     bound = (target_d - z_vals)
     bound[target_d[:, 0] < 0., :] = 10.  # TODO: maybe use noisy depth for bound?
     sdf_mask = (bound.abs() <= truncation) & depth_mask
@@ -379,77 +361,6 @@ def get_sdf_loss(z_vals, target_d, predicted_sdf, mask, truncation, back_truncat
     sdf_loss = (torch.abs(predicted_sdf - bound) * sdf_mask).sum(dim=-1) / sum_of_samples
 
     return fs_loss, sdf_loss
-
-
-def get_masks(z_vals, target_d, mask, truncation):
-
-    # before truncation
-    front_mask = torch.where(z_vals < (target_d - truncation), torch.ones_like(z_vals), torch.zeros_like(z_vals))
-    # after truncation
-    back_mask = torch.where(z_vals > (target_d + truncation), torch.ones_like(z_vals), torch.zeros_like(z_vals))
-    # valid mask
-    depth_mask = torch.where(target_d > 0.0, torch.ones_like(target_d), torch.zeros_like(target_d))
-    # Valid sdf regionn
-    sdf_mask = (1.0 - front_mask) * (1.0 - back_mask) * depth_mask
-
-    # mask valid 1 not valid 0
-    front_mask[mask.squeeze() == 0] = 1
-    sdf_mask[mask.squeeze() == 0] = 0
-
-    num_fs_samples = torch.count_nonzero(front_mask)
-    num_sdf_samples = torch.count_nonzero(sdf_mask)
-    back_fs_samples = torch.count_nonzero(back_mask)
-    num_samples = num_sdf_samples + num_fs_samples
-    fs_weight = 1.0 - num_fs_samples / num_samples
-    sdf_weight = 1.0 - num_sdf_samples / num_samples
-    bfs_weight = 1.0 - back_fs_samples / num_samples
-
-    return front_mask, sdf_mask, back_mask, fs_weight, sdf_weight, bfs_weight
-
-
-def get_sdf_loss_nrgbd(z_vals, target_d, predicted_sdf, mask, truncation, back_truncation=0.01, inside_masksphere=None,
-                 loss_type='l1', grad=None):
-
-    if inside_masksphere is not None:
-        #sdf_mask *= inside_masksphere
-        predicted_sdf = predicted_sdf * inside_masksphere
-        z_vals = z_vals * inside_masksphere
-        target_d = target_d * inside_masksphere
-
-    front_mask, sdf_mask, back_mask, fs_weight, sdf_weight, bfs_weight = get_masks(z_vals, target_d, mask, truncation)
-
-    fs_loss = compute_loss(predicted_sdf * front_mask, torch.ones_like(predicted_sdf) * front_mask, loss_type) * fs_weight
-    sdf_loss = compute_loss((z_vals + predicted_sdf * truncation) * sdf_mask, target_d * sdf_mask, loss_type) * sdf_weight
-    psi_b = 0.6  # *torch.exp(-25. * (z_vals - back_truncation*torch.ones_like(z_vals))**2)
-    back_fs_loss = (torch.max((torch.exp(-5. * predicted_sdf) - psi_b) * back_mask, torch.zeros_like(predicted_sdf)).clamp(
-        min=0.) * back_mask).sum(dim=-1) * bfs_weight
-
-    if grad is not None:
-        eikonal_loss = (((grad.norm(2, dim=-1) - 1) ** 2) * sdf_mask / sdf_mask.sum()).sum()
-        return fs_loss, sdf_loss, eikonal_loss
-    #fs_loss = fs_loss + back_fs_loss
-
-    return fs_loss, sdf_loss
-
-
-def compute_loss(prediction, target, loss_type='l2'):
-    if loss_type == 'l2':
-        return img2mse(prediction, target)
-    elif loss_type == 'l1':
-        return img2mae(prediction, target)
-
-    raise Exception('Unsupported loss type')
-
-
-def get_depth_loss(predicted_depth, target_d, loss_type='l2'):
-    #set_trace()
-    depth_mask = torch.where(target_d > 0, torch.ones_like(target_d), torch.zeros_like(target_d))
-    eps = 1e-4
-    num_pixel = torch.tensor(depth_mask.size())[0]
-    num_valid = torch.count_nonzero(depth_mask) + eps
-    depth_valid_weight = num_pixel / num_valid
-
-    return compute_loss(predicted_depth[..., None] * depth_mask, target_d * depth_mask, loss_type) * depth_valid_weight
 
 
 def apply_log_transform(tsdf):

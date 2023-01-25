@@ -48,12 +48,10 @@ class Embedder:
             output[:, (self.num_fns*i+start)*self.input_dims:(self.num_fns*(i+1)+start)*self.input_dims] *= (1.-math.cos(
                 math.pi*(max(min(alpha_ratio*self.num_freqs-i, 1.), 0.))
             )) * .5
-        if self.kwargs['oneblob']:
-            output = output
         return output
 
 
-def get_embedder(multires, input_dims=3, oneblob=False):
+def get_embedder(multires, input_dims=3):
     embed_kwargs = {
         'include_input': True,
         'input_dims': input_dims,
@@ -61,7 +59,6 @@ def get_embedder(multires, input_dims=3, oneblob=False):
         'num_freqs': multires,
         'log_sampling': True,
         'periodic_fns': [torch.sin, torch.cos],
-        'oneblob': oneblob
     }
 
     embedder_obj = Embedder(**embed_kwargs)

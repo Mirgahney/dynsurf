@@ -171,8 +171,8 @@ class Dataset:
                                 (zeros, zeros, zeros, ones), dim=1)[:,None,:]),
                                     dim=1)
         if self.use_depth:
-            fx_d, fy_d, cx_d, cy_d = self.intrinsics_paras[:,0], self.intrinsics_paras[:,1],\
-                            self.intrinsics_paras[:,2], self.intrinsics_paras[:,3]
+            fx_d, fy_d, cx_d, cy_d = self.depth_intrinsics_paras[:,0], self.depth_intrinsics_paras[:,1],\
+                            self.depth_intrinsics_paras[:,2], self.depth_intrinsics_paras[:,3]
             zeros = torch.zeros_like(fx_d)
             ones = torch.ones_like(fx_d)
             depth_intrinsics_all_inv_mat = torch.stack((torch.stack(
@@ -209,9 +209,9 @@ class Dataset:
         pose = se3.exp(pose_paras)
         if add_depth:
             if self.is_monocular:
-                depth_intrinsic_paras = self.intrinsics_paras[:1, :]
+                depth_intrinsic_paras = self.depth_intrinsics_paras[:1, :]
             else:
-                depth_intrinsic_paras = self.intrinsics_paras[img_idx:(img_idx+1), :]
+                depth_intrinsic_paras = self.depth_intrinsics_paras[img_idx:(img_idx+1), :]
             fx_d, fy_d, cx_d, cy_d = depth_intrinsic_paras[:,0], depth_intrinsic_paras[:,1],\
                                         depth_intrinsic_paras[:,2], depth_intrinsic_paras[:,3]
             zeros = torch.zeros_like(fx_d)

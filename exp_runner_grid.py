@@ -14,12 +14,11 @@ from pyhocon import ConfigFactory
 
 from models.dataset import Dataset
 from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, DeformNetwork, AppearanceNetwork, \
-    TopoNetwork, SODeformaNet, GeometryNet, RadianceNet, GeometryNetLat, RadianceNetLat, TinyAppearanceNetwork, \
-    TinyGeomeryNetwork, RNVPDeformNetwork, SRNVPDeformNetwork, PRNVPDeformNetwork
+    TopoNetwork, SODeformaNet, GeometryNet, RadianceNet, GeometryNetLat, RadianceNetLat
 from models.renderer import NeuSRenderer, DeformNeuSRenderer
-from models.grid_renderer import DeformGoSRenderer, DeformNRGBDRenderer
-from models.multi_grid import MultiGrid, GaussianMultiGrid
-from models.rend_utils import coordinates, qp_to_sdf, get_depth_loss
+from models.grid_renderer import DeformGoSRenderer
+from models.multi_grid import MultiGrid
+from models.rend_utils import coordinates, qp_to_sdf
 from pdb import set_trace
 
 
@@ -45,26 +44,24 @@ class Runner:
         # Deform
         self.use_deform = self.conf.get_bool('train.use_deform')
         self.use_global_rigid = self.conf.get_bool('train.use_global_rigid')
-        self.use_app = self.conf.get_bool('train.use_app')
-        self.use_pts = self.conf.get_bool('train.use_pts')
         self.use_bijective = self.conf.get_bool('train.use_bijective')
-        self.bij_type = self.conf['train.bij_type']
         self.use_topo = self.conf.get_bool('train.use_topo')
         if self.use_deform:
             self.deform_dim = self.conf.get_int('model.deform_network.d_feature')
-            self.deform_codes = torch.randn(self.dataset.n_loaded_images, self.deform_dim, requires_grad=True).to(self.device)
+            self.deform_codes = torch.randn(self.dataset.n_loaded_images, self.deform_dim, requires_grad=True).to(
+                self.device)
             self.appearance_dim = self.conf.get_int('model.appearance_rendering_network.d_global_feature')
-            self.appearance_codes = torch.randn(self.dataset.n_loaded_images, self.appearance_dim, requires_grad=True).to(self.device)
+            self.appearance_codes = torch.randn(self.dataset.n_loaded_images, self.appearance_dim,
+                                                requires_grad=True).to(self.device)
             if self.use_global_rigid:
-                self.log_qua = nn.parameter.Parameter(torch.zeros((self.dataset.n_loaded_images, 9))).to(self.device)  # [N, 9]
+                self.log_qua = nn.parameter.Parameter(torch.zeros((self.dataset.n_loaded_images, 9))).to(
+                    self.device)  # [N, 9]
             else:
                 self.log_qua = None
 
         # Training parameters
         self.end_iter = self.conf.get_int('train.end_iter')
         self.important_begin_iter = self.conf.get_int('model.neus_renderer.important_begin_iter')
-        #self.sample_strategy = self.conf.get_int('train.sample_strategy')
-        self.sample_sequential = self.conf.get_int('train.sample_sequential')
         # Anneal
         self.max_pe_iter = self.conf.get_int('train.max_pe_iter')
 
@@ -87,7 +84,6 @@ class Runner:
         self.sdf_weight = self.conf.get_float('train.sdf_weight')
         self.fs_weight = self.conf.get_float('train.fs_weight')
         self.surf_sdf = self.conf.get_float('train.surf_sdf')
-        self.smooth_weight = self.conf.get_float('train.smooth_weight')
 
         self.truncation = self.conf.get_float('train.truncation')
         self.back_truncation = self.conf.get_float('train.back_truncation')
@@ -105,29 +101,17 @@ class Runner:
         # Deform
         if self.use_deform:
             if self.use_bijective:
-                if self.bij_type == 'ndr':
-                    self.deform_network = DeformNetwork(**self.conf['model.deform_network']).to(self.device)
-                elif self.bij_type == 'rnvp':
-                    #self.deform_network = RNVPDeformNetwork(**self.conf['model.deform_network']).to(self.device)
-                    self.deform_network = PRNVPDeformNetwork(**self.conf['model.deform_network']).to(self.device)
-                elif self.bij_type == 'sm2':
-                    self.deform_network = SRNVPDeformNetwork(**self.conf['model.deform_network']).to(self.device)
+                self.deform_network = DeformNetwork(**self.conf['model.deform_network']).to(self.device)
             else:
                 self.deform_network = SODeformaNet(**self.conf['model.deform_network']).to(self.device)
             self.topo_network = TopoNetwork(**self.conf['model.topo_network']).to(self.device)
-        #self.sdf_network = SDFNetwork(**self.conf['model.sdf_network']).to(self.device)
-        if self.use_pts:
-            self.sdf_network = TinyGeomeryNetwork(**self.conf['model.tiny_sdf_network']).to(self.device)
-        else:
-            self.sdf_network = GeometryNet(**self.conf['model.sdf_network']).to(self.device)
+        # self.sdf_network = SDFNetwork(**self.conf['model.sdf_network']).to(self.device)
+        self.sdf_network = GeometryNet(**self.conf['model.sdf_network']).to(self.device)
         self.deviation_network = SingleVarianceNetwork(**self.conf['model.variance_network']).to(self.device)
         # Deform
         if self.use_deform:
-            if self.use_app:
-                self.color_network = AppearanceNetwork(**self.conf['model.appearance_rendering_network']).to(self.device)
-                #self.color_network = TinyAppearanceNetwork(**self.conf['model.rendering_network']).to(self.device)
-            else:
-                self.color_network = RadianceNet(**self.conf['model.rendering_network']).to(self.device)
+            # self.color_network = AppearanceNetwork(**self.conf['model.appearance_rendering_network']).to(self.device)
+            self.color_network = RadianceNet(**self.conf['model.rendering_network']).to(self.device)
         else:
             self.color_network = RenderingNetwork(**self.conf['model.rendering_network']).to(self.device)
 
@@ -135,7 +119,7 @@ class Runner:
         self.volume_origin = None
         self.volume_max = None
         self.volume_dim = None
-        #xyz_min, xyz_max = torch.tensor([-1.05, -1.05, -1.05]), torch.tensor([1.05, 1.05, 1.05])
+        # xyz_min, xyz_max = torch.tensor([-1.05, -1.05, -1.05]), torch.tensor([1.05, 1.05, 1.05])
         xyz_min = torch.tensor(self.dataset.object_bbox_min, dtype=self.dtype)
         xyz_max = torch.tensor(self.dataset.object_bbox_max, dtype=self.dtype)
         self.init_volume_dims(xyz_min, xyz_max)
@@ -144,26 +128,9 @@ class Runner:
         self.feature_grid = self.create_feature_grid(self.fine_res, self.feat_dims)
         self.rgb_dim = self.conf.get_int('model.feature_grid.rgb_dim')
 
-        self.pg_scale = self.conf.get_list('model.feature_grid.pg_scale')
-        self.feat_scale = self.conf.get_list('model.feature_grid.feat_scale')
-
         # Deform
         if self.use_deform:
-            #self.renderer = DeformGoSRenderer(self.report_freq,
-            #                         self.deform_network,
-            #                         self.topo_network,
-            #                         self.sdf_network,
-            #                         self.deviation_network,
-            #                         self.color_network,
-            #                         self.feature_grid,
-            #                         self.volume_origin,
-            #                         self.volume_dim,
-            #                         self.rgb_dim,
-            #                         **self.conf['model.neus_renderer'],
-            #                         use_app=self.use_app,
-            #                         use_pts=self.use_pts)
-
-            self.renderer = DeformNRGBDRenderer(self.report_freq,
+            self.renderer = DeformGoSRenderer(self.report_freq,
                                               self.deform_network,
                                               self.topo_network,
                                               self.sdf_network,
@@ -173,36 +140,41 @@ class Runner:
                                               self.volume_origin,
                                               self.volume_dim,
                                               self.rgb_dim,
-                                              **self.conf['model.neus_renderer'],
-                                              use_app=self.use_app,
-                                              use_pts=self.use_pts)
+                                              **self.conf['model.neus_renderer'])
         else:
             self.renderer = NeuSRenderer(self.sdf_network,
-                                        self.deviation_network,
-                                        self.color_network,
-                                        **self.conf['model.neus_renderer'])
+                                         self.deviation_network,
+                                         self.color_network,
+                                         **self.conf['model.neus_renderer'])
 
         # Load Optimizer
         params_to_train = []
         if self.use_deform:
-            params_to_train += [{'name': 'deform_network', 'params': self.deform_network.parameters(), 'lr': 10*self.learning_rate}]
-            params_to_train += [{'name': 'topo_network', 'params': self.topo_network.parameters(), 'lr': 10*self.learning_rate}]
+            params_to_train += [
+                {'name': 'deform_network', 'params': self.deform_network.parameters(), 'lr': self.learning_rate}]
+            params_to_train += [
+                {'name': 'topo_network', 'params': self.topo_network.parameters(), 'lr': self.learning_rate}]
             params_to_train += [{'name': 'deform_codes', 'params': self.deform_codes, 'lr': self.learning_rate}]
             params_to_train += [{'name': 'appearance_codes', 'params': self.appearance_codes, 'lr': self.learning_rate}]
             if self.use_global_rigid:
                 params_to_train += [{'name': 'log_qua', 'params': self.log_qua, 'lr': 7e-4}]
-        params_to_train += [{'name': 'feature_grid', 'params': self.feature_grid.parameters(), 'lr': self.learning_rate}]
-        params_to_train += [{'name': 'sdf_network', 'params': self.sdf_network.parameters(), 'lr': 10*self.learning_rate}]
-        params_to_train += [{'name': 'deviation_network', 'params': self.deviation_network.parameters(), 'lr': self.learning_rate}]
-        params_to_train += [{'name': 'color_network', 'params': self.color_network.parameters(), 'lr': 10*self.learning_rate}]
+        params_to_train += [
+            {'name': 'feature_grid', 'params': self.feature_grid.parameters(), 'lr': self.learning_rate}]
+        params_to_train += [{'name': 'sdf_network', 'params': self.sdf_network.parameters(), 'lr': self.learning_rate}]
+        params_to_train += [
+            {'name': 'deviation_network', 'params': self.deviation_network.parameters(), 'lr': self.learning_rate}]
+        params_to_train += [
+            {'name': 'color_network', 'params': self.color_network.parameters(), 'lr': self.learning_rate}]
 
         # Camera
         if self.dataset.camera_trainable:
-            params_to_train += [{'name':'intrinsics_paras', 'params':self.dataset.intrinsics_paras, 'lr':self.learning_rate}]
-            params_to_train += [{'name':'poses_paras', 'params':self.dataset.poses_paras, 'lr':self.learning_rate}]
+            params_to_train += [
+                {'name': 'intrinsics_paras', 'params': self.dataset.intrinsics_paras, 'lr': self.learning_rate}]
+            params_to_train += [{'name': 'poses_paras', 'params': self.dataset.poses_paras, 'lr': self.learning_rate}]
             # Depth
             if self.use_depth:
-                params_to_train += [{'name':'depth_intrinsics_paras', 'params':self.dataset.depth_intrinsics_paras, 'lr':self.learning_rate}]
+                params_to_train += [{'name': 'depth_intrinsics_paras', 'params': self.dataset.depth_intrinsics_paras,
+                                     'lr': self.learning_rate}]
 
         self.optimizer = torch.optim.Adam(params_to_train)
 
@@ -227,64 +199,11 @@ class Runner:
         # Backup codes and configs
         if self.mode[:5] == 'train':
             self.file_backup()
-            #self.geom_init(2.1/5)
+            # self.geom_init(2.1/5)
             if not self.is_continue:
-                #self.geom_init(2.1/2.3)
-                self.geom_init(2.1/4.)
-                #pass
-
-    def update_and_create_optimizer(self):
-        optim_param_groups = self.optimizer.param_groups
-        # Load Optimizer
-        params_to_train = []
-        i = 0
-        if self.use_deform:
-            assert 'deform_network' == optim_param_groups[i]['name']
-            params_to_train += [{'name': 'deform_network', 'params': self.deform_network.parameters(),
-                                'lr': optim_param_groups[i]['lr']}]
-            i += 1
-            params_to_train += [{'name': 'topo_network', 'params': self.topo_network.parameters(),
-                                 'lr': optim_param_groups[i]['lr']}]
-            i += 1
-            params_to_train += [{'name': 'deform_codes', 'params': self.deform_codes, 'lr': optim_param_groups[i]['lr']}]
-            i += 1
-            params_to_train += [{'name': 'appearance_codes', 'params': self.appearance_codes,
-                                 'lr': optim_param_groups[i]['lr']}]
-            i += 1
-            if self.use_global_rigid:
-                assert 'log_qua' == optim_param_groups[i]['name']
-                params_to_train += [{'name': 'log_qua', 'params': self.log_qua, 'lr': optim_param_groups[i]['lr']}]
-                i += 1
-        params_to_train += [{'name': 'feature_grid', 'params': self.feature_grid.parameters(),
-                             'lr': optim_param_groups[i]['lr']}]
-        i += 1
-        params_to_train += [{'name': 'sdf_network', 'params': self.sdf_network.parameters(),
-                             'lr': optim_param_groups[i]['lr']}]
-        i += 1
-        params_to_train += [{'name': 'deviation_network', 'params': self.deviation_network.parameters(),
-                            'lr': optim_param_groups[i]['lr']}]
-        i += 1
-        params_to_train += [{'name': 'color_network', 'params': self.color_network.parameters(),
-                             'lr': optim_param_groups[i]['lr']}]
-        i += 1
-
-        # Camera
-        if self.dataset.camera_trainable:
-            assert 'intrinsics_paras' == optim_param_groups[i]['name']
-            params_to_train += [{'name': 'intrinsics_paras', 'params': self.dataset.intrinsics_paras,
-                                'lr': optim_param_groups[i]['lr']}]
-            i += 1
-            params_to_train += [{'name': 'poses_paras', 'params': self.dataset.poses_paras,
-                                 'lr': optim_param_groups[i]['lr']}]
-            i += 1
-            # Depth
-            if self.use_depth:
-                assert 'depth_intrinsics_paras' == optim_param_groups[i]['name']
-                params_to_train += [{'name': 'depth_intrinsics_paras', 'params': self.dataset.depth_intrinsics_paras,
-                                     'lr': optim_param_groups[i]['lr']}]
-                i += 1
-
-        self.optimizer = torch.optim.Adam(params_to_train)
+                # self.geom_init(2.1/2.3)
+                self.geom_init(2.1 / 4.)
+                # pass
 
     def create_feature_grid(self, fine_res, feat_dims):
         voxel_dims = []
@@ -296,23 +215,6 @@ class Runner:
         # init_feat = torch.rand(1, torch.tensor(feat_dims).sum(), device=self.device) * 0.02 - 0.01
         init_feat = torch.zeros(1, torch.tensor(feat_dims).sum(), device=self.device)
         return MultiGrid(voxel_dims, init_feat, feat_dims)
-        #return GaussianMultiGrid(voxel_dims, init_feat, feat_dims)
-
-    def _set_grid_resolution(self, feat_scale):
-        # Determine grid resolution
-        voxel_dims = []
-        for i in range(len(self.world_size)):
-            res = self.world_size[i][0]
-            res_scale = feat_scale[i]
-            voxel_dims.append(torch.tensor([int(res * res_scale)] * 3, device=self.device))
-        self.world_size = voxel_dims
-
-    def upscale_feature_grid(self, feat_scale):
-        print('scale_volume_grid start')
-        ori_world_size = self.world_size
-        self._set_grid_resolution(feat_scale)
-        print('scale_volume_grid scale world_size from', ori_world_size, 'to', self.world_size)
-        self.feature_grid.upscale(self.world_size)
 
     def geom_init(self, radius=1.5, chunk=500000):
         optimizer = torch.optim.Adam([
@@ -351,12 +253,12 @@ class Runner:
                 ambient_coord = self.topo_network(deform_code, qp_chunk, alpha_ratio)
 
                 sdf, *_ = qp_to_sdf(qp_chunk.unsqueeze(1), self.volume_origin, self.volume_dim, self.feature_grid,
-                                    self.sdf_network, hyper_embed=ambient_coord, rgb_dim=self.rgb_dim, use_pts=self.use_pts)
-                #sdf = sdf.squeeze(-1)
+                                    self.sdf_network, hyper_embed=ambient_coord, rgb_dim=self.rgb_dim)
+                # sdf = sdf.squeeze(-1)
                 sdf = sdf.squeeze(0)
 
                 loss = torch.nn.functional.mse_loss(sdf, target_sdf_chunk)
-                #loss = torch.nn.functional.l1_loss(sdf, target_sdf_chunk)
+                # loss = torch.nn.functional.l1_loss(sdf, target_sdf_chunk)
                 loss.backward(retain_graph=True)
                 optimizer.step()
             if j % print_i == 0:
@@ -376,8 +278,8 @@ class Runner:
             record_shapes=True, profile_memory=True, with_stack=True)
         self.update_learning_rate()
         res_step = self.end_iter - self.iter_step
-        image_perm = self.get_image_perm(self.sample_sequential)
-        #self.profile.start()
+        image_perm = self.get_image_perm()
+        # self.profile.start()
         for iter_i in tqdm(range(res_step)):
             # Deform
             if self.use_deform:
@@ -389,13 +291,8 @@ class Runner:
                     print('The files will be saved in:', self.base_exp_dir)
                     print('Used GPU:', self.gpu)
                     self.validate_observation_mesh(self.validate_idx)
-                    #self.validate_canonical_mesh()
+                    # self.validate_canonical_mesh()
                 # Deptdeviation_networkh
-
-                if iter_i in self.pg_scale:
-                    self.upscale_feature_grid(self.feat_scale)
-                    self.update_and_create_optimizer()
-
                 if self.use_depth:
                     data = self.dataset.gen_random_rays_at_depth(image_idx, self.batch_size)
                     rays_o, rays_d, rays_s, rays_l, true_rgb, mask = \
@@ -408,7 +305,7 @@ class Runner:
                 # Deform
                 appearance_code = self.appearance_codes[image_idx][None, ...]
                 # Anneal
-                alpha_ratio = max(min(self.iter_step/self.max_pe_iter, 1.), 0.)
+                alpha_ratio = max(min(self.iter_step / self.max_pe_iter, 1.), 0.)
 
                 near, far = self.dataset.near_far_from_sphere(rays_o, rays_d)
 
@@ -416,27 +313,26 @@ class Runner:
                     mask = (mask > 0.5).to(self.dtype)
                 else:
                     mask = torch.ones_like(mask)
-                mask = (mask > 0.0).to(self.dtype)
                 mask_sum = mask.sum() + 1e-5
                 if self.sdf_weight != 0.0:
-                    render_out = self.renderer.render(deform_code, appearance_code, rays_o, rays_d, near, far, mask,
+                    render_out = self.renderer.render(deform_code, appearance_code, rays_o, rays_d, near, far,
                                                       cos_anneal_ratio=self.get_cos_anneal_ratio(),
                                                       alpha_ratio=alpha_ratio, iter_step=self.iter_step, rays_l=rays_l,
                                                       truncation=self.truncation, back_truncation=self.back_truncation,
                                                       log_qua=log_qua)
                 else:
-                    render_out = self.renderer.render(deform_code, appearance_code, rays_o, rays_d, near, far, mask,
-                                                cos_anneal_ratio=self.get_cos_anneal_ratio(),
-                                                alpha_ratio=alpha_ratio, iter_step=self.iter_step)
+                    render_out = self.renderer.render(deform_code, appearance_code, rays_o, rays_d, near, far,
+                                                      cos_anneal_ratio=self.get_cos_anneal_ratio(),
+                                                      alpha_ratio=alpha_ratio, iter_step=self.iter_step)
                 # Depth
                 if self.use_depth:
-                    sdf_loss_surf, angle_loss, valid_depth_region =\
+                    sdf_loss_surf, angle_loss, valid_depth_region = \
                         self.renderer.errorondepth(deform_code, rays_o, rays_d, rays_s, mask,
-                                            alpha_ratio, iter_step=self.iter_step, log_qua=log_qua)
-                    foreground_mask = mask[:,0] > 0.5
+                                                   alpha_ratio, iter_step=self.iter_step, log_qua=log_qua)
+                    foreground_mask = mask[:, 0] > 0.5
                     inside_sphere = render_out['inside_sphere']
                     if self.sdf_weight != 0.0:
-                        sdf_loss = 10*render_out['sdf_loss'][foreground_mask].mean()
+                        sdf_loss = 10 * render_out['sdf_loss'][foreground_mask].mean()
                         if self.surf_sdf != 0.0:
                             sdf_loss = sdf_loss + self.surf_sdf * sdf_loss_surf
                     else:
@@ -450,12 +346,11 @@ class Runner:
                 weight_max = render_out['weight_max']
                 weight_sum = render_out['weight_sum']
                 depth_map = render_out['depth_map']
-                smoothness_loss = render_out['smoothness_loss']
 
                 # Loss
                 color_error = (color_fine - true_rgb) * mask
                 color_fine_loss = F.l1_loss(color_error, torch.zeros_like(color_error), reduction='sum') / mask_sum
-                psnr = 20.0 * torch.log10(1.0 / (((color_fine - true_rgb)**2 * mask).sum() / (mask_sum * 3.0)).sqrt())
+                psnr = 20.0 * torch.log10(1.0 / (((color_fine - true_rgb) ** 2 * mask).sum() / (mask_sum * 3.0)).sqrt())
 
                 eikonal_loss = gradient_o_error
 
@@ -464,8 +359,7 @@ class Runner:
                 if self.use_depth:
                     depth_minus = (depth_map - rays_l) * valid_depth_region
                     depth_loss = F.l1_loss(depth_minus, torch.zeros_like(depth_minus), reduction='sum') \
-                                    / (valid_depth_region.sum() + 1e-5)
-                    #depth_loss = get_depth_loss(depth_map, rays_l, loss_type='l1')
+                                 / (valid_depth_region.sum() + 1e-5)
                     if self.iter_step < self.important_begin_iter:
                         rgb_scale = 0.1
                         geo_scale = 10.0
@@ -476,42 +370,26 @@ class Runner:
                         geo_scale = 1.0
                         regular_scale = 10.0
                         geo_loss = 0.5 * (depth_loss + sdf_loss)
-                        #geo_loss = depth_loss
                     else:
                         rgb_scale = 1.0
                         geo_scale = 0.1
                         regular_scale = 1.0
                         geo_loss = 0.5 * (depth_loss + sdf_loss)
-                        #geo_loss = depth_loss
                 else:
                     if self.iter_step < self.max_pe_iter:
                         regular_scale = 10.0
                     else:
                         regular_scale = 1.0
-                
+
                 if self.use_depth:
-                    loss = color_fine_loss * rgb_scale + self.sdf_weight * sdf_loss+ \
-                        (geo_loss * self.geo_weight + angle_loss * self.angle_weight) * geo_scale +\
-                        (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale + \
-                           fs_loss * self.fs_weight + smoothness_loss * self.smooth_weight
+                    loss = color_fine_loss * rgb_scale + \
+                           (geo_loss * self.geo_weight + angle_loss * self.angle_weight) * geo_scale + \
+                           (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale + \
+                           fs_loss * self.fs_weight
                 else:
-                    loss = color_fine_loss +\
-                        (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
-                    #loss = (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
-
-                volume_feature = self.feature_grid.volumes[0].squeeze(0).permute(1, 2, 3, 0)
-                feat_dim = volume_feature.shape[-1]
-                volume_feature = volume_feature.reshape(-1, feat_dim)
-                sdf_volume, rgb_volume = volume_feature[:8], volume_feature[8:]
-                sdf_volume_std = torch.std(sdf_volume, dim=0)
-                rgb_volume_std = torch.std(rgb_volume, dim=0)
-                #sdf_volume_std = torch.norm(sdf_volume_std)
-                #rgb_volume_std = torch.norm(rgb_volume_std)
-
-                sdf_volume_std = torch.std(sdf_volume)
-                rgb_volume_std = torch.std(rgb_volume)
-
-                #loss = loss + 1.0*sdf_volume_std #+ 1.0*rgb_volume_std
+                    loss = color_fine_loss + \
+                           (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
+                    # loss = (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -538,14 +416,14 @@ class Runner:
                 self.writer.add_scalar('Statistics/cdf', (cdf_fine[:, :1] * mask).sum() / mask_sum, self.iter_step)
                 self.writer.add_scalar('Statistics/weight_max', (weight_max * mask).sum() / mask_sum, self.iter_step)
                 self.writer.add_scalar('Statistics/psnr', psnr, self.iter_step)
-                self.writer.add_scalar('Statistics/sdf_volume_std', sdf_volume_std, self.iter_step)
-                self.writer.add_scalar('Statistics/rgb_volume_std', rgb_volume_std, self.iter_step)
 
                 if self.iter_step % self.report_freq == 0:
                     print('The files have been saved in:', self.base_exp_dir)
                     print('Used GPU:', self.gpu)
                     print('iter:{:8>d} loss={} idx={} alpha_ratio={} lr={}'.format(self.iter_step, loss, image_idx,
-                            alpha_ratio, self.optimizer.param_groups[0]['lr']))
+                                                                                   alpha_ratio,
+                                                                                   self.optimizer.param_groups[0][
+                                                                                       'lr']))
 
                 if self.iter_step % self.save_freq == 0:
                     self.save_checkpoint()
@@ -560,9 +438,9 @@ class Runner:
                     self.validate_observation_mesh(self.validate_idx)
 
                 self.update_learning_rate()
-                
+
                 if self.iter_step % len(image_perm) == 0:
-                    image_perm = self.get_image_perm(self.sample_sequential)
+                    image_perm = self.get_image_perm()
 
             else:
                 if self.iter_step == 0:
@@ -579,7 +457,7 @@ class Runner:
 
                 mask_sum = mask.sum() + 1e-5
                 render_out = self.renderer.render(rays_o, rays_d, near, far,
-                                                cos_anneal_ratio=self.get_cos_anneal_ratio())
+                                                  cos_anneal_ratio=self.get_cos_anneal_ratio())
 
                 color_fine = render_out['color_fine']
                 s_val = render_out['s_val']
@@ -593,15 +471,15 @@ class Runner:
                 # Loss
                 color_error = (color_fine - true_rgb) * mask
                 color_fine_loss = F.l1_loss(color_error, torch.zeros_like(color_error), reduction='sum') / mask_sum
-                psnr = 20.0 * torch.log10(1.0 / (((color_fine - true_rgb)**2 * mask).sum() / (mask_sum * 3.0)).sqrt())
+                psnr = 20.0 * torch.log10(1.0 / (((color_fine - true_rgb) ** 2 * mask).sum() / (mask_sum * 3.0)).sqrt())
 
                 eikonal_loss = gradient_error
 
                 mask_loss = F.binary_cross_entropy(weight_sum.clip(1e-3, 1.0 - 1e-3), mask)
 
-                loss = color_fine_loss +\
-                    eikonal_loss * self.igr_weight +\
-                    mask_loss * self.mask_weight #+ sdf_loss * self.sdf_weight + fs_loss * self.fs_loss
+                loss = color_fine_loss + \
+                       eikonal_loss * self.igr_weight + \
+                       mask_loss * self.mask_weight  # + sdf_loss * self.sdf_weight + fs_loss * self.fs_loss
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -625,7 +503,8 @@ class Runner:
                 if self.iter_step % self.report_freq == 0:
                     print('The file have been saved in:', self.base_exp_dir)
                     print('Used GPU:', self.gpu)
-                    print('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss, self.optimizer.param_groups[0]['lr']))
+                    print('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss,
+                                                               self.optimizer.param_groups[0]['lr']))
 
                 if self.iter_step % self.save_freq == 0:
                     self.save_checkpoint()
@@ -639,16 +518,13 @@ class Runner:
                 self.update_learning_rate()
 
                 if self.iter_step % len(image_perm) == 0:
-                    image_perm = self.get_image_perm(self.sample_sequential)
+                    image_perm = self.get_image_perm()
 
-            #self.profile.step()
-        #self.profile.stop()
+            # self.profile.step()
+        # self.profile.stop()
 
-    def get_image_perm(self, sequential:bool=False):
-        if sequential:
-            return torch.arange(0, self.dataset.n_loaded_images)
-        else:
-            return torch.randperm(self.dataset.n_loaded_images)
+    def get_image_perm(self):
+        return torch.randperm(self.dataset.n_loaded_images)
 
     def get_cos_anneal_ratio(self):
         if self.anneal_end == 0.0:
@@ -688,13 +564,11 @@ class Runner:
         logging.info('File Saved')
 
     def load_checkpoint(self, checkpoint_name):
-        checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name), map_location=self.device)
-        for i in range(len(self.pg_scale)):
-            self.upscale_feature_grid(self.feat_scale)
+        checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name),
+                                map_location=self.device)
         self.feature_grid.load_state_dict(checkpoint['feature_grid']),
         self.sdf_network.load_state_dict(checkpoint['sdf_network_fine'])
         self.deviation_network.load_state_dict(checkpoint['variance_network_fine'])
-        #set_trace()
         self.color_network.load_state_dict(checkpoint['color_network_fine'])
         # Deform
         if self.use_deform:
@@ -764,9 +638,11 @@ class Runner:
             }
 
         os.makedirs(os.path.join(self.base_exp_dir, 'checkpoints'), exist_ok=True)
-        torch.save(checkpoint, os.path.join(self.base_exp_dir, 'checkpoints', 'ckpt_{:0>7d}.pth'.format(self.iter_step)))
+        torch.save(checkpoint,
+                   os.path.join(self.base_exp_dir, 'checkpoints', 'ckpt_{:0>7d}.pth'.format(self.iter_step)))
 
-    def validate_image(self, idx=-1, resolution_level=-1, mode='train', normal_filename='normals', rgb_filename='rgbs', depth_filename='depths'):
+    def validate_image(self, idx=-1, resolution_level=-1, mode='train', normal_filename='normals', rgb_filename='rgbs',
+                       depth_filename='depths'):
         if idx < 0:
             idx = np.random.randint(self.dataset.n_loaded_images)
         # Deform
@@ -784,10 +660,8 @@ class Runner:
             resolution_level = self.validate_resolution_level
         rays_o, rays_d = self.dataset.gen_rays_at(idx, resolution_level=resolution_level)
         H, W, _ = rays_o.shape
-        mask = torch.ones_like(rays_o[..., 0:1])
         rays_o = rays_o.reshape(-1, 3).split(batch_size)
         rays_d = rays_d.reshape(-1, 3).split(batch_size)
-        mask = mask.reshape(-1, 1).split(batch_size)
 
         out_rgb_fine = []
         out_rgb_fine_ours = []
@@ -798,25 +672,25 @@ class Runner:
             near, far = self.dataset.near_far_from_sphere(rays_o_batch, rays_d_batch)
             if self.use_deform:
                 render_out = self.renderer.render(deform_code,
-                                                appearance_code,
-                                                rays_o_batch,
-                                                rays_d_batch,
-                                                near,
-                                                far,
-                                                mask,
-                                                cos_anneal_ratio=self.get_cos_anneal_ratio(),
-                                                alpha_ratio=max(min(self.iter_step/self.max_pe_iter, 1.), 0.),
-                                                iter_step=self.iter_step,
-                                                log_qua=log_qua)
-                #render_out['gradients'] = render_out['gradients_o']
+                                                  appearance_code,
+                                                  rays_o_batch,
+                                                  rays_d_batch,
+                                                  near,
+                                                  far,
+                                                  cos_anneal_ratio=self.get_cos_anneal_ratio(),
+                                                  alpha_ratio=max(min(self.iter_step / self.max_pe_iter, 1.), 0.),
+                                                  iter_step=self.iter_step,
+                                                  log_qua=log_qua)
+                render_out['gradients'] = render_out['gradients_o']
             else:
                 render_out = self.renderer.render(rays_o_batch,
-                                                rays_d_batch,
-                                                near,
-                                                far,
-                                                cos_anneal_ratio=self.get_cos_anneal_ratio())
-            
-            def feasible(key): return (key in render_out) and (render_out[key] is not None)
+                                                  rays_d_batch,
+                                                  near,
+                                                  far,
+                                                  cos_anneal_ratio=self.get_cos_anneal_ratio())
+
+            def feasible(key):
+                return (key in render_out) and (render_out[key] is not None)
 
             if feasible('color_fine'):
                 out_rgb_fine.append(render_out['color_fine'].detach().cpu().numpy())
@@ -831,7 +705,7 @@ class Runner:
                     normals = normals * render_out['inside_sphere'][..., None]
                 normals = normals.sum(dim=1).detach().cpu().numpy()
                 out_normal_fine.append(normals)
-            #del render_out['depth_map'] # Annotate it if you want to visualize estimated depth map!
+            del render_out['depth_map']  # Annotate it if you want to visualize estimated depth map!
             if feasible('depth_map'):
                 out_depth_fine.append(render_out['depth_map'].detach().cpu().numpy())
             del render_out
@@ -858,7 +732,7 @@ class Runner:
         if len(out_depth_fine) > 0:
             depth_img = np.concatenate(out_depth_fine, axis=0)
             depth_img = depth_img.reshape([H, W, 1, -1])
-            depth_img = 255. - np.clip(depth_img/depth_img.max(), a_max=1, a_min=0) * 255.
+            depth_img = 255. - np.clip(depth_img / depth_img.max(), a_max=1, a_min=0) * 255.
             depth_img = np.uint8(depth_img)
         os.makedirs(os.path.join(self.base_exp_dir, rgb_filename), exist_ok=True)
         os.makedirs(os.path.join(self.base_exp_dir, normal_filename), exist_ok=True)
@@ -881,18 +755,18 @@ class Runner:
                                         normal_filename,
                                         '{:0>8d}_{}.png'.format(self.iter_step, idx)),
                            normal_img[..., i])
-            
+
             if len(out_depth_fine) > 0:
                 if self.use_depth:
                     cv.imwrite(os.path.join(self.base_exp_dir,
                                             depth_filename,
                                             '{:0>8d}_{}.png'.format(self.iter_step, idx)),
-                            np.concatenate([cv.applyColorMap(depth_img[..., i], cv.COLORMAP_JET),
-                                                self.dataset.depth_at(idx, resolution_level=resolution_level)]))
+                               np.concatenate([cv.applyColorMap(depth_img[..., i], cv.COLORMAP_JET),
+                                               self.dataset.depth_at(idx, resolution_level=resolution_level)]))
                 else:
                     cv.imwrite(os.path.join(self.base_exp_dir, depth_filename,
                                             '{:0>8d}_{}.png'.format(self.iter_step, idx)),
-                                            cv.applyColorMap(depth_img[..., i], cv.COLORMAP_JET))
+                               cv.applyColorMap(depth_img[..., i], cv.COLORMAP_JET))
 
     def validate_image_with_depth(self, idx=-1, resolution_level=-1, mode='train'):
         if idx < 0:
@@ -923,24 +797,24 @@ class Runner:
 
         for rays_o_batch, rays_d_batch, rays_s_batch in zip(rays_o, rays_d, rays_s):
             color_batch, gradients_batch = self.renderer.renderondepth(deform_code,
-                                                    appearance_code,
-                                                    rays_o_batch,
-                                                    rays_d_batch,
-                                                    rays_s_batch,
-                                                    alpha_ratio=max(min(self.iter_step/self.max_pe_iter, 1.), 0.),
-                                                    log_qua=log_qua)
+                                                                       appearance_code,
+                                                                       rays_o_batch,
+                                                                       rays_d_batch,
+                                                                       rays_s_batch,
+                                                                       alpha_ratio=max(
+                                                                           min(self.iter_step / self.max_pe_iter, 1.),
+                                                                           0.),
+                                                                       log_qua=log_qua)
 
             out_rgb_fine.append(color_batch.detach().cpu().numpy())
-            #out_normal_fine.append(gradients_batch.detach().cpu().numpy())
+            out_normal_fine.append(gradients_batch.detach().cpu().numpy())
             del color_batch, gradients_batch
 
         img_fine = None
         if len(out_rgb_fine) > 0:
-            #set_trace()
-            if self.use_app:
-                img_fine = (np.concatenate(out_rgb_fine, axis=0).reshape([H, W, 3, -1]) * 256).clip(0, 255)
-            else:
-                img_fine = (np.concatenate(out_rgb_fine, axis=1).reshape([H, W, 3, -1]) * 256).clip(0, 255)
+            # set_trace()
+            # img_fine = (np.concatenate(out_rgb_fine, axis=0).reshape([H, W, 3, -1]) * 256).clip(0, 255)
+            img_fine = (np.concatenate(out_rgb_fine, axis=1).reshape([H, W, 3, -1]) * 256).clip(0, 255)
             img_fine = img_fine * mask
 
         normal_img = None
@@ -975,14 +849,15 @@ class Runner:
 
     def validate_all_image(self, resolution_level=-1):
         for image_idx in range(self.dataset.n_loaded_images):
-            self.validate_image(image_idx, resolution_level, 'test', 'validations_normals', 'validations_rgbs', 'validations_depths')
+            self.validate_image(image_idx, resolution_level, 'test', 'validations_normals', 'validations_rgbs',
+                                'validations_depths')
             print('Used GPU:', self.gpu)
 
     def validate_mesh(self, world_space=False, resolution=64, threshold=0.0):
         bound_min = torch.tensor(self.dataset.object_bbox_min, dtype=self.dtype)
         bound_max = torch.tensor(self.dataset.object_bbox_max, dtype=self.dtype)
-        
-        vertices, triangles =\
+
+        vertices, triangles = \
             self.renderer.extract_geometry(bound_min, bound_max, resolution=resolution, threshold=threshold)
         os.makedirs(os.path.join(self.base_exp_dir, 'meshes'), exist_ok=True)
 
@@ -999,10 +874,10 @@ class Runner:
         print('extract canonical mesh')
         bound_min = torch.tensor(self.dataset.object_bbox_min, dtype=self.dtype)
         bound_max = torch.tensor(self.dataset.object_bbox_max, dtype=self.dtype)
-        
-        vertices, triangles =\
+
+        vertices, triangles = \
             self.renderer.extract_canonical_geometry(bound_min, bound_max, resolution=resolution, threshold=threshold,
-                                                        alpha_ratio=max(min(self.iter_step/self.max_pe_iter, 1.), 0.))
+                                                     alpha_ratio=max(min(self.iter_step / self.max_pe_iter, 1.), 0.))
         os.makedirs(os.path.join(self.base_exp_dir, filename), exist_ok=True)
 
         if world_space:
@@ -1012,7 +887,7 @@ class Runner:
         mesh.export(os.path.join(self.base_exp_dir, filename, '{:0>8d}_canonical.ply'.format(self.iter_step)))
 
         logging.info('End')
-    
+
     # Deform
     def validate_observation_mesh(self, idx=-1, world_space=False, resolution=64, threshold=0.0, filename='meshes'):
         if idx < 0:
@@ -1023,11 +898,13 @@ class Runner:
 
         bound_min = torch.tensor(self.dataset.object_bbox_min, dtype=self.dtype)
         bound_max = torch.tensor(self.dataset.object_bbox_max, dtype=self.dtype)
-        #bound_min, bound_max = torch.tensor([-1.05, -1.05, -1.05]), torch.tensor([1.05, 1.05, 1.05])
-        
-        vertices, triangles =\
-            self.renderer.extract_observation_geometry(deform_code, bound_min, bound_max, resolution=resolution, threshold=threshold,
-                                                        alpha_ratio=max(min(self.iter_step/self.max_pe_iter, 1.), 0.), log_qua=log_qua)
+        # bound_min, bound_max = torch.tensor([-1.05, -1.05, -1.05]), torch.tensor([1.05, 1.05, 1.05])
+
+        vertices, triangles = \
+            self.renderer.extract_observation_geometry(deform_code, bound_min, bound_max, resolution=resolution,
+                                                       threshold=threshold,
+                                                       alpha_ratio=max(min(self.iter_step / self.max_pe_iter, 1.), 0.),
+                                                       log_qua=log_qua)
         os.makedirs(os.path.join(self.base_exp_dir, filename), exist_ok=True)
 
         if world_space:
@@ -1045,10 +922,9 @@ class Runner:
             print('Used GPU:', self.gpu)
 
 
-
 # This implementation is built upon NeuS: https://github.com/Totoro97/NeuS
 if __name__ == '__main__':
-    print('Welcome to DynamicSurf')
+    print('Welcome to NDR')
 
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
