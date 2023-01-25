@@ -475,14 +475,14 @@ class Runner:
                         rgb_scale = 1.0
                         geo_scale = 1.0
                         regular_scale = 10.0
-                        #geo_loss = 0.5 * (depth_loss + sdf_loss)
-                        geo_loss = depth_loss
+                        geo_loss = 0.5 * (depth_loss + sdf_loss)
+                        #geo_loss = depth_loss
                     else:
                         rgb_scale = 1.0
                         geo_scale = 0.1
                         regular_scale = 1.0
-                        #geo_loss = 0.5 * (depth_loss + sdf_loss)
-                        geo_loss = depth_loss
+                        geo_loss = 0.5 * (depth_loss + sdf_loss)
+                        #geo_loss = depth_loss
                 else:
                     if self.iter_step < self.max_pe_iter:
                         regular_scale = 10.0
