@@ -19,6 +19,7 @@ from models.renderer import NeuSRenderer, DeformNeuSRenderer
 from models.grid_renderer import DeformGoSRenderer
 from models.multi_grid import MultiGrid
 from models.rend_utils import coordinates, qp_to_sdf
+from models.utils import TVLoss
 from pdb import set_trace
 
 
@@ -84,6 +85,7 @@ class Runner:
         self.sdf_weight = self.conf.get_float('train.sdf_weight')
         self.fs_weight = self.conf.get_float('train.fs_weight')
         self.surf_sdf = self.conf.get_float('train.surf_sdf')
+        self.tv_weight = self.conf.get_float('train.tv_weight')
 
         self.truncation = self.conf.get_float('train.truncation')
         self.back_truncation = self.conf.get_float('train.back_truncation')
@@ -177,6 +179,7 @@ class Runner:
                                      'lr': self.learning_rate}]
 
         self.optimizer = torch.optim.Adam(params_to_train)
+        self.tv_loss_fn = TVLoss(1.0)
 
         # Load checkpoint
         latest_model_name = None
@@ -215,6 +218,12 @@ class Runner:
         # init_feat = torch.rand(1, torch.tensor(feat_dims).sum(), device=self.device) * 0.02 - 0.01
         init_feat = torch.zeros(1, torch.tensor(feat_dims).sum(), device=self.device)
         return MultiGrid(voxel_dims, init_feat, feat_dims)
+
+    def tv_loss(self, volums):
+        total = 0.0
+        for vol in volums:
+            total = total + self.tv_loss_fn(vol)
+        return total
 
     def geom_init(self, radius=1.5, chunk=500000):
         optimizer = torch.optim.Adam([
@@ -381,11 +390,13 @@ class Runner:
                     else:
                         regular_scale = 1.0
 
+                tv_loss = self.tv_loss(self.feature_grid.volumes)
+
                 if self.use_depth:
                     loss = color_fine_loss * rgb_scale + \
                            (geo_loss * self.geo_weight + angle_loss * self.angle_weight) * geo_scale + \
                            (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale + \
-                           fs_loss * self.fs_weight
+                           fs_loss * self.fs_weight + tv_loss * self.tv_weight
                 else:
                     loss = color_fine_loss + \
                            (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
@@ -409,6 +420,7 @@ class Runner:
                     del angle_loss
                 self.writer.add_scalar('Loss/eikonal_loss', eikonal_loss, self.iter_step)
                 self.writer.add_scalar('Loss/mask_loss', mask_loss, self.iter_step)
+                self.writer.add_scalar('Loss/tv_loss', tv_loss, self.iter_step)
                 del eikonal_loss
                 del mask_loss
 
@@ -742,18 +754,18 @@ class Runner:
             if len(out_rgb_fine) > 0:
                 cv.imwrite(os.path.join(self.base_exp_dir,
                                         rgb_filename,
-                                        '{:0>8d}_{}.png'.format(self.iter_step, idx)),
+                                        '{:0>8d}_{:0>3d}.png'.format(self.iter_step, idx)),
                            np.concatenate([img_fine[..., i],
                                            self.dataset.image_at(idx, resolution_level=resolution_level)]))
                 cv.imwrite(os.path.join(self.base_exp_dir,
                                         rgb_filename,
-                                        'ours{:0>8d}_{}.png'.format(self.iter_step, idx)),
+                                        'ours{:0>8d}_{:0>3d}.png'.format(self.iter_step, idx)),
                            np.concatenate([img_fine_ours[..., i],
                                            self.dataset.image_at(idx, resolution_level=resolution_level)]))
             if len(out_normal_fine) > 0:
                 cv.imwrite(os.path.join(self.base_exp_dir,
                                         normal_filename,
-                                        '{:0>8d}_{}.png'.format(self.iter_step, idx)),
+                                        '{:0>8d}_{:0>3d}.png'.format(self.iter_step, idx)),
                            normal_img[..., i])
 
             if len(out_depth_fine) > 0:
@@ -838,13 +850,13 @@ class Runner:
             if len(out_rgb_fine) > 0:
                 cv.imwrite(os.path.join(self.base_exp_dir,
                                         'rgbsondepth',
-                                        '{:0>8d}_depth_{}.png'.format(self.iter_step, idx)),
+                                        '{:0>8d}_depth_{:0>3d}.png'.format(self.iter_step, idx)),
                            np.concatenate([img_fine[..., i],
                                            self.dataset.image_at(idx, resolution_level=resolution_level)]))
             if len(out_normal_fine) > 0:
                 cv.imwrite(os.path.join(self.base_exp_dir,
                                         'normalsondepth',
-                                        '{:0>8d}_depth_{}.png'.format(self.iter_step, idx)),
+                                        '{:0>8d}_depth_{:0>3d}.png'.format(self.iter_step, idx)),
                            normal_img[..., i])
 
     def validate_all_image(self, resolution_level=-1):
@@ -911,7 +923,7 @@ class Runner:
             vertices = vertices * self.dataset.scale_mats_np[0][0, 0] + self.dataset.scale_mats_np[0][:3, 3][None]
 
         mesh = trimesh.Trimesh(vertices, triangles)
-        mesh.export(os.path.join(self.base_exp_dir, filename, '{:0>8d}_{}.ply'.format(self.iter_step, idx)))
+        mesh.export(os.path.join(self.base_exp_dir, filename, '{:0>8d}_{:0>3d}.ply'.format(self.iter_step, idx)))
 
         logging.info('End')
 
@@ -948,7 +960,7 @@ if __name__ == '__main__':
 
     if args.mode == 'train':
         runner.train()
-    elif args.mode[:8] == 'validate':
+    elif args.mode[:8] == 'valid':
         if runner.use_deform:
             runner.validate_all_mesh(world_space=False, resolution=512, threshold=args.mcube_threshold)
             runner.validate_all_image(resolution_level=1)
