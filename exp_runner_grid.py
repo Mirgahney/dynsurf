@@ -17,7 +17,7 @@ from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, D
     TopoNetwork, SODeformaNet, GeometryNet, RadianceNet, GeometryNetLat, RadianceNetLat
 from models.renderer import NeuSRenderer, DeformNeuSRenderer
 from models.grid_renderer import DeformGoSRenderer
-from models.multi_grid import MultiGrid
+from models.multi_grid import MultiGrid, GaussianMultiGrid
 from models.rend_utils import coordinates, qp_to_sdf
 from models.utils import TVLoss
 from pdb import set_trace
@@ -127,6 +127,7 @@ class Runner:
         self.init_volume_dims(xyz_min, xyz_max)
         self.feat_dims = self.conf.get_list('model.feature_grid.feat_dims')
         self.fine_res = self.conf.get_int('model.feature_grid.res')
+        self.grid_type = self.conf.get_int('model.feature_grid.type')
         self.feature_grid = self.create_feature_grid(self.fine_res, self.feat_dims)
         self.rgb_dim = self.conf.get_int('model.feature_grid.rgb_dim')
 
@@ -217,7 +218,10 @@ class Runner:
         voxel_dims = torch.stack(voxel_dims, 0)
         # init_feat = torch.rand(1, torch.tensor(feat_dims).sum(), device=self.device) * 0.02 - 0.01
         init_feat = torch.zeros(1, torch.tensor(feat_dims).sum(), device=self.device)
-        return MultiGrid(voxel_dims, init_feat, feat_dims)
+        if self.grid_type == 'normal':
+            return MultiGrid(voxel_dims, init_feat, feat_dims)
+        elif self.grid_type == 'Gaussian':
+            return GaussianMultiGrid(voxel_dims, init_feat, feat_dims)
 
     def tv_loss(self, volums):
         total = 0.0
