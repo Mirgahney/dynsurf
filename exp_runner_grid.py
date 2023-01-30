@@ -127,7 +127,7 @@ class Runner:
         self.init_volume_dims(xyz_min, xyz_max)
         self.feat_dims = self.conf.get_list('model.feature_grid.feat_dims')
         self.fine_res = self.conf.get_int('model.feature_grid.res')
-        self.grid_type = self.conf.get_int('model.feature_grid.type')
+        self.grid_type = self.conf.get('model.feature_grid.type')
         self.feature_grid = self.create_feature_grid(self.fine_res, self.feat_dims)
         self.rgb_dim = self.conf.get_int('model.feature_grid.rgb_dim')
 
@@ -180,7 +180,7 @@ class Runner:
                                      'lr': self.learning_rate}]
 
         self.optimizer = torch.optim.Adam(params_to_train)
-        self.tv_loss_fn = TVLoss(1.0)
+        self.tv_loss_fn = TVLoss(1.0, [1])
 
         # Load checkpoint
         latest_model_name = None
