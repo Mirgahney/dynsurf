@@ -130,6 +130,8 @@ class Runner:
         self.grid_type = self.conf.get('model.feature_grid.type')
         self.feature_grid = self.create_feature_grid(self.fine_res, self.feat_dims)
         self.rgb_dim = self.conf.get_int('model.feature_grid.rgb_dim')
+        self.pg_scale = self.conf.get_list('model.feature_grid.pg_scale')
+        self.feat_scale = self.conf.get_list('model.feature_grid.feat_scale')
 
         # Deform
         if self.use_deform:
@@ -209,6 +211,60 @@ class Runner:
                 self.geom_init(2.1 / 4.)
                 # pass
 
+    def update_and_create_optimizer(self):
+        optim_param_groups = self.optimizer.param_groups
+        # Load Optimizer
+        params_to_train = []
+        i = 0
+        if self.use_deform:
+            assert 'deform_network' == optim_param_groups[i]['name']
+            params_to_train += [{'name': 'deform_network', 'params': self.deform_network.parameters(),
+                                 'lr': optim_param_groups[i]['lr']}]
+            i += 1
+            params_to_train += [{'name': 'topo_network', 'params': self.topo_network.parameters(),
+                                 'lr': optim_param_groups[i]['lr']}]
+            i += 1
+            params_to_train += [
+                {'name': 'deform_codes', 'params': self.deform_codes, 'lr': optim_param_groups[i]['lr']}]
+            i += 1
+            params_to_train += [{'name': 'appearance_codes', 'params': self.appearance_codes,
+                                 'lr': optim_param_groups[i]['lr']}]
+            i += 1
+            if self.use_global_rigid:
+                assert 'log_qua' == optim_param_groups[i]['name']
+                params_to_train += [{'name': 'log_qua', 'params': self.log_qua, 'lr': optim_param_groups[i]['lr']}]
+                i += 1
+        params_to_train += [{'name': 'feature_grid', 'params': self.feature_grid.parameters(),
+                             'lr': optim_param_groups[i]['lr']}]
+        i += 1
+        params_to_train += [{'name': 'sdf_network', 'params': self.sdf_network.parameters(),
+                             'lr': optim_param_groups[i]['lr']}]
+        i += 1
+        params_to_train += [{'name': 'deviation_network', 'params': self.deviation_network.parameters(),
+                             'lr': optim_param_groups[i]['lr']}]
+        i += 1
+        params_to_train += [{'name': 'color_network', 'params': self.color_network.parameters(),
+                             'lr': optim_param_groups[i]['lr']}]
+        i += 1
+
+        # Camera
+        if self.dataset.camera_trainable:
+            assert 'intrinsics_paras' == optim_param_groups[i]['name']
+            params_to_train += [{'name': 'intrinsics_paras', 'params': self.dataset.intrinsics_paras,
+                                 'lr': optim_param_groups[i]['lr']}]
+            i += 1
+            params_to_train += [{'name': 'poses_paras', 'params': self.dataset.poses_paras,
+                                 'lr': optim_param_groups[i]['lr']}]
+            i += 1
+            # Depth
+            if self.use_depth:
+                assert 'depth_intrinsics_paras' == optim_param_groups[i]['name']
+                params_to_train += [{'name': 'depth_intrinsics_paras', 'params': self.dataset.depth_intrinsics_paras,
+                                     'lr': optim_param_groups[i]['lr']}]
+                i += 1
+
+        self.optimizer = torch.optim.Adam(params_to_train)
+
     def create_feature_grid(self, fine_res, feat_dims):
         voxel_dims = []
         for i in range(len(feat_dims)):
@@ -222,6 +278,22 @@ class Runner:
             return MultiGrid(voxel_dims, init_feat, feat_dims)
         elif self.grid_type == 'Gaussian':
             return GaussianMultiGrid(voxel_dims, init_feat, feat_dims)
+
+    def _set_grid_resolution(self, feat_scale):
+        # Determine grid resolution
+        voxel_dims = []
+        for i in range(len(self.world_size)):
+            res = self.world_size[i][0]
+            res_scale = feat_scale[i]
+            voxel_dims.append(torch.tensor([int(res * res_scale)] * 3, device=self.device))
+        self.world_size = voxel_dims
+
+    def upscale_feature_grid(self, feat_scale):
+        print('scale_volume_grid start')
+        ori_world_size = self.world_size
+        self._set_grid_resolution(feat_scale)
+        print('scale_volume_grid scale world_size from', ori_world_size, 'to', self.world_size)
+        self.feature_grid.upscale(self.world_size)
 
     def tv_loss(self, volums):
         total = 0.0
@@ -305,6 +377,11 @@ class Runner:
                     print('Used GPU:', self.gpu)
                     self.validate_observation_mesh(self.validate_idx)
                     # self.validate_canonical_mesh()
+
+                if iter_i in self.pg_scale:
+                    self.upscale_feature_grid(self.feat_scale)
+                    self.update_and_create_optimizer()
+
                 # Deptdeviation_networkh
                 if self.use_depth:
                     data = self.dataset.gen_random_rays_at_depth(image_idx, self.batch_size)
