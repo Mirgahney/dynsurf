@@ -185,7 +185,7 @@ class Runner:
                 params_to_train += [{'name': 'depth_intrinsics_paras', 'params': self.dataset.depth_intrinsics_paras,
                                      'lr': self.learning_rate}]
 
-        #self.optimizer = torch.optim.Adam(params_to_train)
+        self.optimizer = torch.optim.Adam(params_to_train)
         self.tv_loss_fn = TVLoss(1.0, [1])
 
         # Load checkpoint
