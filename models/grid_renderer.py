@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import numpy as np
 import mcubes
 from models.rend_utils import qp_to_sdf, neus_weights, get_sdf_loss
+from models.losses import compute_akap_loss, compute_elastic_loss
 from pdb import set_trace
 
 
@@ -342,6 +343,9 @@ class DeformGoSRenderer:
         else:
             fs_loss, sdf_loss = 0., 0.
 
+        akap_loss = compute_akap_loss(pts_jacobian)
+        elastic_loss, residual = compute_elastic_loss(pts_jacobian)
+
         return {
             'pts': pts.reshape(batch_size, n_samples, 3),
             'pts_canonical': pts_canonical.reshape(batch_size, n_samples, 3),
@@ -362,6 +366,8 @@ class DeformGoSRenderer:
             'depth_map_ours': depth_map_ours,
             'fs_loss': fs_loss,
             'sdf_loss': sdf_loss,
+            'akap_loss': akap_loss.mean(),
+            'elastic_loss': elastic_loss.mean(),
         }
 
     # TODO: modify this to work with grid
@@ -456,7 +462,9 @@ class DeformGoSRenderer:
             'inside_sphere': ret_fine['inside_sphere'],
             'depth_map': ret_fine['depth_map'],
             'fs_loss': ret_fine['fs_loss'],
-            'sdf_loss': ret_fine['sdf_loss']
+            'sdf_loss': ret_fine['sdf_loss'],
+            'akap_loss': ret_fine['akap_loss'],
+            'elastic_loss': ret_fine['elastic_loss'],
         }
 
     # Depth
