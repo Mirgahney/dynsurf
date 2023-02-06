@@ -1023,7 +1023,7 @@ class GeometryNet(nn.Module):
             else:
                 layer = nn.Linear(in_dim, out_dim)
 
-            if weight_norm:
+            if weight_norm and l == D:
                 layer = nn.utils.weight_norm(layer)
 
             layers.append(layer)
@@ -1093,7 +1093,7 @@ class RadianceNet(nn.Module):
             else:
                 layer = nn.Linear(in_dim, out_dim)
 
-            if weight_norm:
+            if weight_norm and l == D:
                 layer = nn.utils.weight_norm(layer)
 
             layers.append(layer)
@@ -1165,7 +1165,7 @@ class GeometryNetLat(nn.Module):
             else:
                 layer = nn.Linear(in_dim, out_dim)
 
-            if weight_norm:
+            if weight_norm and l == D:
                 layer = nn.utils.weight_norm(layer)
 
             layers.append(layer)
@@ -1237,7 +1237,7 @@ class RadianceNetLat(nn.Module):
             else:
                 layer = nn.Linear(in_dim, out_dim)
 
-            if weight_norm:
+            if weight_norm and l ==D:
                 layer = nn.utils.weight_norm(layer)
 
             layers.append(layer)

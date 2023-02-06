@@ -86,6 +86,7 @@ class Runner:
         self.fs_weight = self.conf.get_float('train.fs_weight')
         self.surf_sdf = self.conf.get_float('train.surf_sdf')
         self.tv_weight = self.conf.get_float('train.tv_weight')
+        self.akap_weight = self.conf.get_float('train.akap_weight')
 
         self.truncation = self.conf.get_float('train.truncation')
         self.back_truncation = self.conf.get_float('train.back_truncation')
@@ -99,6 +100,9 @@ class Runner:
         if self.use_depth:
             self.geo_weight = self.conf.get_float('train.geo_weight')
             self.angle_weight = self.conf.get_float('train.angle_weight')
+            self.geo_scale = self.conf.get_list('train.geo_scale')
+            self.rgb_scale = self.conf.get_list('train.rgb_scale')
+            self.regular_scale = self.conf.get_list('train.regular_scale')
 
         # Deform
         if self.use_deform:
@@ -181,7 +185,7 @@ class Runner:
                 params_to_train += [{'name': 'depth_intrinsics_paras', 'params': self.dataset.depth_intrinsics_paras,
                                      'lr': self.learning_rate}]
 
-        self.optimizer = torch.optim.Adam(params_to_train)
+        #self.optimizer = torch.optim.Adam(params_to_train)
         self.tv_loss_fn = TVLoss(1.0, [1])
 
         # Load checkpoint
@@ -436,6 +440,8 @@ class Runner:
                 weight_max = render_out['weight_max']
                 weight_sum = render_out['weight_sum']
                 depth_map = render_out['depth_map']
+                akap_loss = render_out['akap_loss']
+                elastic_loss = render_out['elastic_loss']
 
                 # Loss
                 color_error = (color_fine - true_rgb) * mask
@@ -451,19 +457,19 @@ class Runner:
                     depth_loss = F.l1_loss(depth_minus, torch.zeros_like(depth_minus), reduction='sum') \
                                  / (valid_depth_region.sum() + 1e-5)
                     if self.iter_step < self.important_begin_iter:
-                        rgb_scale = 0.1
-                        geo_scale = 10.0
-                        regular_scale = 10.0
+                        rgb_scale = self.rgb_scale[0]  # 0.1
+                        geo_scale = self.geo_scale[0]  # 10.0
+                        regular_scale = self.regular_scale[0]  # 10.0
                         geo_loss = sdf_loss
                     elif self.iter_step < self.max_pe_iter:
-                        rgb_scale = 1.0
-                        geo_scale = 1.0
-                        regular_scale = 10.0
+                        rgb_scale = self.rgb_scale[1]  # 1.0
+                        geo_scale = self.geo_scale[1]  # 1.0
+                        regular_scale = self.regular_scale[1]  # 10.0
                         geo_loss = 0.5 * (depth_loss + sdf_loss)
                     else:
-                        rgb_scale = 1.0
-                        geo_scale = 0.1
-                        regular_scale = 1.0
+                        rgb_scale = self.rgb_scale[2]  # 1.0
+                        geo_scale = self.geo_scale[2]  # 0.1  # big jump for our case maybe?
+                        regular_scale = self.regular_scale[2]  # 1.0
                         geo_loss = 0.5 * (depth_loss + sdf_loss)
                 else:
                     if self.iter_step < self.max_pe_iter:
@@ -477,7 +483,7 @@ class Runner:
                     loss = color_fine_loss * rgb_scale + \
                            (geo_loss * self.geo_weight + angle_loss * self.angle_weight) * geo_scale + \
                            (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale + \
-                           fs_loss * self.fs_weight + tv_loss * self.tv_weight
+                           fs_loss * self.fs_weight + tv_loss * self.tv_weight + akap_loss * self.akap_weight
                 else:
                     loss = color_fine_loss + \
                            (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
@@ -502,6 +508,8 @@ class Runner:
                 self.writer.add_scalar('Loss/eikonal_loss', eikonal_loss, self.iter_step)
                 self.writer.add_scalar('Loss/mask_loss', mask_loss, self.iter_step)
                 self.writer.add_scalar('Loss/tv_loss', tv_loss, self.iter_step)
+                self.writer.add_scalar('Loss/akap_loss', akap_loss, self.iter_step)
+                self.writer.add_scalar('Loss/elastic_loss', elastic_loss, self.iter_step)
                 del eikonal_loss
                 del mask_loss
 
@@ -659,7 +667,9 @@ class Runner:
     def load_checkpoint(self, checkpoint_name):
         checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name),
                                 map_location=self.device)
-        self.feature_grid.load_state_dict(checkpoint['feature_grid']),
+        for i in range(len(self.pg_scale)):
+            self.upscale_feature_grid(self.feat_scale)
+        self.feature_grid.load_state_dict(checkpoint['feature_grid'])
         self.sdf_network.load_state_dict(checkpoint['sdf_network_fine'])
         self.deviation_network.load_state_dict(checkpoint['variance_network_fine'])
         self.color_network.load_state_dict(checkpoint['color_network_fine'])
@@ -798,7 +808,7 @@ class Runner:
                     normals = normals * render_out['inside_sphere'][..., None]
                 normals = normals.sum(dim=1).detach().cpu().numpy()
                 out_normal_fine.append(normals)
-            del render_out['depth_map']  # Annotate it if you want to visualize estimated depth map!
+            #del render_out['depth_map']  # Annotate it if you want to visualize estimated depth map!
             if feasible('depth_map'):
                 out_depth_fine.append(render_out['depth_map'].detach().cpu().numpy())
             del render_out
@@ -853,12 +863,12 @@ class Runner:
                 if self.use_depth:
                     cv.imwrite(os.path.join(self.base_exp_dir,
                                             depth_filename,
-                                            '{:0>8d}_{}.png'.format(self.iter_step, idx)),
+                                            '{:0>8d}_{:0>3d}.png'.format(self.iter_step, idx)),
                                np.concatenate([cv.applyColorMap(depth_img[..., i], cv.COLORMAP_JET),
                                                self.dataset.depth_at(idx, resolution_level=resolution_level)]))
                 else:
                     cv.imwrite(os.path.join(self.base_exp_dir, depth_filename,
-                                            '{:0>8d}_{}.png'.format(self.iter_step, idx)),
+                                            '{:0>8d}_{:0>3d}.png'.format(self.iter_step, idx)),
                                cv.applyColorMap(depth_img[..., i], cv.COLORMAP_JET))
 
     def validate_image_with_depth(self, idx=-1, resolution_level=-1, mode='train'):
@@ -1017,7 +1027,7 @@ class Runner:
 
 # This implementation is built upon NeuS: https://github.com/Totoro97/NeuS
 if __name__ == '__main__':
-    print('Welcome to NDR')
+    print('Welcome to DySurf')
 
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
