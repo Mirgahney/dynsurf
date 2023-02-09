@@ -359,6 +359,8 @@ class DeformNetwork(nn.Module):
     def forward(self, deformation_code, input_pts, alpha_ratio, log_quan=None):
         batch_size = input_pts.shape[0]
         x = input_pts
+        num_rays, lat_dim = deformation_code.shape
+        samples = batch_size // num_rays
         for i_b in range(self.n_blocks):
             form = (i_b // 3) % 2
             mode = i_b % 3
@@ -366,7 +368,8 @@ class DeformNetwork(nn.Module):
             lin = getattr(self, "lin" + str(i_b) + "_c")
             # interesting! they do a linear residual mapping then concatenate deformation code why??
             deform_code_ib = lin(deformation_code) + deformation_code
-            deform_code_ib = deform_code_ib.repeat(batch_size, 1)
+            deform_code_ib = deform_code_ib.repeat(samples, 1).reshape(-1, lat_dim)
+            #deform_code_ib = deform_code_ib.repeat(batch_size, 1)
             # part a
             if form == 0:
                 # zyx
@@ -444,6 +447,8 @@ class DeformNetwork(nn.Module):
     def inverse(self, deformation_code, input_pts, alpha_ratio, log_quan=None):
         batch_size = input_pts.shape[0]
         x = input_pts
+        num_rays, lat_dim = deformation_code.shape
+        samples = batch_size // num_rays
         for i_b in range(self.n_blocks):
             i_b = self.n_blocks - 1 - i_b  # inverse
             form = (i_b // 3) % 2
@@ -451,7 +456,8 @@ class DeformNetwork(nn.Module):
 
             lin = getattr(self, "lin" + str(i_b) + "_c")
             deform_code_ib = lin(deformation_code) + deformation_code
-            deform_code_ib = deform_code_ib.repeat(batch_size, 1)
+            deform_code_ib = deform_code_ib.repeat(samples, 1).reshape(-1, lat_dim)
+            #deform_code_ib = deform_code_ib.repeat(batch_size, 1)
             # part b
             if form == 0:
                 # axis: z -> y -> x
@@ -696,7 +702,11 @@ class TopoNetwork(nn.Module):
             if self.embed_fn_fine is not None:
                 # Anneal
                 input_pts = self.embed_fn_fine(input_pts, alpha_ratio)
-            x = torch.cat([input_pts, deformation_code.repeat(input_pts.shape[0], 1)], dim=-1)
+            #x = torch.cat([input_pts, deformation_code.repeat(input_pts.shape[0], 1)], dim=-1)
+            num_rays, lat_dim = deformation_code.shape
+            samples = input_pts.shape[0] // num_rays
+            deformation_code = deformation_code.repeat(samples, 1).reshape(-1, lat_dim)
+            x = torch.cat([input_pts, deformation_code], dim=-1)
             for l in range(0, self.num_layers - 1):
                 lin = getattr(self, "lin" + str(l))
 

@@ -87,6 +87,8 @@ class Runner:
         self.surf_sdf = self.conf.get_float('train.surf_sdf')
         self.tv_weight = self.conf.get_float('train.tv_weight')
         self.akap_weight = self.conf.get_float('train.akap_weight')
+        self.temp_weight = self.conf.get_float('train.temp_weight')
+        self.latent_weight = self.conf.get_float('train.latent_weight')
 
         self.truncation = self.conf.get_float('train.truncation')
         self.back_truncation = self.conf.get_float('train.back_truncation')
@@ -482,12 +484,26 @@ class Runner:
                 if self.use_depth:
                     loss = color_fine_loss * rgb_scale + \
                            (geo_loss * self.geo_weight + angle_loss * self.angle_weight) * geo_scale + \
-                           (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale + \
-                           fs_loss * self.fs_weight + tv_loss * self.tv_weight + akap_loss * self.akap_weight
+                           (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight + akap_loss * self.akap_weight) * regular_scale + \
+                           fs_loss * self.fs_weight + tv_loss * self.tv_weight #+ akap_loss * self.akap_weight
                 else:
                     loss = color_fine_loss + \
                            (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
                     # loss = (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
+
+                # temporal regularisation
+                N = self.deform_codes.shape[0]
+                ids = torch.arange(N).long().to(self.device)
+                prev_delta = torch.randint(1, 3, (N,)).to(self.device)
+                prev_ids = torch.clamp(ids - prev_delta, min=0).long()
+                next_delta = torch.randint(1, 3, (N,)).to(self.device)
+                next_ids = torch.clamp(ids + next_delta, max=N - 1).long()
+                deform_temporal_loss, deform_code_loss, app_temporal_loss, app_code_loss = \
+                    self.get_latent_loss(prev_ids, next_ids)
+                temporal_loss = deform_temporal_loss + app_temporal_loss
+                code_loss = deform_code_loss + app_code_loss
+
+                loss = loss + self.temp_weight * temporal_loss + self.latent_weight * code_loss
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -623,6 +639,21 @@ class Runner:
 
             # self.profile.step()
         # self.profile.stop()
+
+    def get_latent_loss(self, prev_ids, next_ids):
+        curr_codes = self.deform_codes.data
+        prev_codes = self.deform_codes.data[prev_ids, :]
+        next_codes = self.deform_codes.data[next_ids, :]
+        deform_temporal_loss = torch.abs(next_codes - curr_codes).mean() + torch.abs(curr_codes - prev_codes).mean()
+        deform_code_loss = curr_codes.norm(dim=1).mean()
+
+        #curr_codes = self.model.appearance_code.data
+        #prev_codes = self.model.appearance_code.data[prev_ids, :]
+        #next_codes = self.model.appearance_code.data[next_ids, :]
+        app_temporal_loss = 0.0 #torch.abs(next_codes - curr_codes).mean() + torch.abs(curr_codes - prev_codes).mean()
+        app_code_loss = 0.0 #curr_codes.norm(dim=1).mean()
+
+        return deform_temporal_loss, deform_code_loss, app_temporal_loss, app_code_loss
 
     def get_image_perm(self):
         return torch.randperm(self.dataset.n_loaded_images)
