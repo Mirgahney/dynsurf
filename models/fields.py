@@ -637,6 +637,132 @@ class SODeformaNet(nn.Module):
         return x_warped
 
 
+class DeformationNetSE3(nn.Module):
+    def __init__(self,
+                 d_feature,  # input_lat_ch
+                 d_in,  #
+                 d_out_1,
+                 d_out_2,
+                 n_blocks,  # [D]
+                 d_hidden,  # W
+                 n_layers,  # D
+                 skip_in=(4,),
+                 multires=0,
+                 weight_norm=True,
+                 ):
+        super(DeformationNetSE3, self).__init__()
+        dims_in = d_in
+        W = d_hidden
+        input_lat_ch = d_feature
+        D = n_layers * n_blocks * 2
+        self.embed_fn, input_ch = get_embedder(multires, input_dims=dims_in)
+        self.x_pe_dim = input_ch
+        self.W = W
+        self.D = D
+        self.skips = skip_in
+        layers = []
+        input_ch = input_ch + input_lat_ch
+
+        for l in range(D+1):
+            if l == D:
+                out_dim = 9
+            else:
+                out_dim = W
+
+            if l == 0:
+                in_dim = input_ch
+            elif l in self.skips:
+                in_dim = input_ch + W
+            else:
+                in_dim = W
+
+            if l != D:
+                layer = DenseLayer(in_dim, out_dim)
+            else:
+                layer = nn.Linear(in_dim, out_dim)
+
+            layers.append(layer)
+
+        self.layers = nn.ModuleList(layers)
+
+    def forward(self, t, x, alpha_ratio=0., log_quan=None, return_pe=False):
+        batch_size = x.shape[0]
+        t = t.repeat(batch_size, 1)
+        if log_quan is not None:
+            log_quan = log_quan.repeat(batch_size, 1)
+            x = self.apply_quan(x, log_quan)
+        x_pe = self.embed_fn(x, alpha_ratio)
+        # x_pe = self.embed_fn(x)
+        # delta_x = torch.zeros_like(x[..., :3])
+        # first_f_idx = ~(t == 0).all(-1)
+        feat = torch.cat([x_pe, t], dim=-1)
+        h = feat
+        for i in range(self.D+1):
+            if i in self.skips:
+                h = torch.cat([h, feat], dim=-1)
+            h = self.layers[i](h)
+
+        #######################################################
+        # Apply SE(3) transformation to input point xyz
+        #######################################################
+        h_shape = h.shape
+        if len(h_shape) == 3:
+            h = h.view(-1, h_shape[-1])
+            x = x.view(-1, 3)
+        # Extract v (rotation), s (pivot point), t (translation)
+        v, s, t = h[..., :3], h[..., 3:-3], h[..., -3:]
+
+        # Convert log-quaternion to unit quaternion
+        q = quaternion_log_to_exp(v)
+
+        # Points centered around pivot points s
+        x_pivot = x - s
+
+        # Apply rotation
+        x_rotated = rotate_points_with_quaternions(p=x_pivot, q=q)
+
+        # Transform back to world space by adding s and also add the additional translation
+        x_warped = x_rotated + s + t
+
+        if len(h_shape) == 3:
+            x_warped = x_warped.view(h_shape[0], h_shape[1], -1)
+
+        if return_pe:  # return x_pe
+            return x_warped, x_pe
+        else:
+            return x_warped
+
+    def inverse(self, t, x, alpha_ratio, log_quan):
+        return self.forward(t, x, alpha_ratio, log_quan)
+
+    def apply_quan(self, x, log_quan):
+
+        log_quan_shape = log_quan.shape
+        if len(log_quan_shape) == 3:
+            log_quan = log_quan.view(-1, log_quan_shape[-1])
+            x = x.view(-1, 3)
+
+        # Extract v (rotation), s (pivot point), t (translation)
+        v, s, t = log_quan[..., :3], log_quan[..., 3:-3], log_quan[..., -3:]
+
+        # Convert log-quaternion to unit quaternion
+        q = quaternion_log_to_exp(v)
+
+        # Points centered around pivot points s
+        x_pivot = x - s
+
+        # Apply rotation
+        x_rotated = rotate_points_with_quaternions(p=x_pivot, q=q)
+
+        # Transform back to world space by adding s and also add the additional translation
+        x_warped = x_rotated + s + t
+
+        if len(log_quan_shape) == 3:
+            x_warped = x_warped.view(log_quan_shape[0], log_quan_shape[1], -1)
+
+        return x_warped
+
+
 # Deform
 class TopoNetwork(nn.Module):
     def __init__(self,
@@ -769,6 +895,9 @@ class AppearanceNetwork(nn.Module):
         rendering_input = None
 
         global_feature = global_feature.repeat(points.shape[0], 1)
+        if len(feature_vectors.shape) == 3:
+            feature_vectors = feature_vectors.squeeze(0)
+
         if self.mode == 'idr':
             rendering_input = torch.cat([points, view_dirs, normals, feature_vectors, global_feature], dim=-1)
         elif self.mode == 'no_view_dir':
@@ -954,6 +1083,8 @@ class RenderingNetwork(nn.Module):
             view_dirs = self.embedview_fn(view_dirs)
 
         rendering_input = None
+        if len(feature_vectors.shape) == 3:
+            feature_vectors = feature_vectors.squeeze(0)
 
         if self.mode == 'idr':
             rendering_input = torch.cat([points, view_dirs, normals, feature_vectors], dim=-1)

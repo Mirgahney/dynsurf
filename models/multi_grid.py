@@ -2,9 +2,9 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from models.smooth_sampler import SmoothSampler
-from torch_geometric.nn import MessagePassing
+#from torch_geometric.nn import MessagePassing
 from networkx import grid_graph
-from torch_geometric.utils import convert
+#from torch_geometric.utils import convert
 from scipy.stats import norm
 import numpy as np
 import math
@@ -14,7 +14,8 @@ from pdb import set_trace
 def generated_grid_data(res=100):
     num_x, num_y, num_z = (res, res, res)
     G = grid_graph(dim=(num_x, num_y, num_z))
-    data = convert.from_networkx(G)
+    #data = convert.from_networkx(G)
+    data = G
 
     #x = np.linspace(-0.5, 0.5, num_x)
     #y = np.linspace(-0.5, 0.5, num_y)
@@ -43,9 +44,10 @@ def sample_volumes(volumes, grid, align_corners=True, apply_smoothstep=False, co
     return out
 
 
-class GraphGaussianBlur(MessagePassing):
+#class GraphGaussianBlur(MessagePassing):
+class GraphGaussianBlur:
     def __init__(self, std:float=1.0, aggr:str="add"):
-        super().__init__(aggr=aggr)
+        #super().__init__(aggr=aggr)
         self.std = std
         self.g_weight = norm.pdf(0.00294, 0.0, self.std)
 
