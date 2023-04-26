@@ -1,0 +1,11 @@
+_target_: models.fields.AppearanceNetwork
+d_feature: 6 #256
+d_global_feature: 64
+mode: idr
+d_in: 9
+d_out: 3
+d_hidden: 64 #256
+n_layers: 2 #4
+weight_norm: True
+multires_view: 4
+squeeze_out: True

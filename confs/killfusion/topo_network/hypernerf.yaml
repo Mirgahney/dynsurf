@@ -1,0 +1,11 @@
+_target_: models.fields.TopoNetwork
+d_feature: 64
+d_in: 3
+d_out: 2
+d_hidden: 64
+n_layers: 7
+skip_in: [5]
+multires: 6
+bias: 0.0
+weight_norm: True
+use_topo: True

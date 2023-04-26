@@ -1,0 +1,10 @@
+_target_: models.fields.RadianceNet
+d_feature: 32 #256
+mode: idr
+d_in: 6 #8 #(rep3_21) #9
+d_out: 3
+d_hidden: 64 #32 #256
+n_layers: 2 #4
+weight_norm: False #True
+multires_view: 0 #4
+squeeze_out: True
