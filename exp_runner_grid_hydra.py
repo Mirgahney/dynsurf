@@ -1131,9 +1131,9 @@ class Runner:
 
 config_paths = ["./confs/ddeform", "./confs/killfusion"]
 config_names = ['seq004_grid_local.yaml', 'frog_grid_local.yaml', 'seq004_grid.yaml', 'seq004_grid_faster.yaml',
-                'seq004_grid_ffaster.yaml']
-#'frog_grid_jade.yaml'  #'frog_grid_priyor_fast.yaml'  #'frog_grid_priyor.yaml'#'seq011_grid.yaml'  #'seq004_dog_grid.yaml'  #
-@hydra.main(config_path=config_paths[0], config_name=config_names[-3])
+                'seq004_grid_ffaster.yaml', 'seq011_grid.yaml', 'seq004_dog_grid.yaml', 'seq004_grid_abl.yaml']
+#'frog_grid_jade.yaml'  #'frog_grid_priyor_fast.yaml'  #'frog_grid_priyor.yaml'#'seq011_grid_old.yaml'  #'seq004_dog_grid_old.yaml'  #
+@hydra.main(config_path=config_paths[0], config_name=config_names[-1])
 def main(cfg):
     #cfg = eval_str_num(cfg)
 

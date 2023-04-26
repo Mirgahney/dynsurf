@@ -153,6 +153,7 @@ class Dataset:
             scale_mat, world_mat = self.scale_mats_np[0], self.world_mats_np[0]
             camera_to_worlds = world_mat @ scale_mat
             camera_to_worlds = torch.from_numpy(camera_to_worlds).float()
+            assert len(self.depth_paths) == len(self.normal_paths) == len(self.images_lis)
             for dpath, npath in zip(self.depth_paths, self.normal_paths):
                 depth = np.load(dpath)
                 depth = (depth - depth.min()) / (depth.max() - depth.min()) # * 0.8 + 0.1
