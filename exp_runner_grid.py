@@ -89,6 +89,7 @@ class Runner:
         self.akap_weight = self.conf.get_float('train.akap_weight')
         self.temp_weight = self.conf.get_float('train.temp_weight')
         self.latent_weight = self.conf.get_float('train.latent_weight')
+        self.smooth_weight = self.conf.get_float('train.smooth_weight')
 
         self.truncation = self.conf.get_float('train.truncation')
         self.back_truncation = self.conf.get_float('train.back_truncation')
@@ -422,7 +423,7 @@ class Runner:
                                                       alpha_ratio=alpha_ratio, iter_step=self.iter_step)
                 # Depth
                 if self.use_depth:
-                    sdf_loss_surf, angle_loss, valid_depth_region = \
+                    sdf_loss_surf, angle_loss, valid_depth_region, normal_smoothness_loss = \
                         self.renderer.errorondepth(deform_code, rays_o, rays_d, rays_s, mask,
                                                    alpha_ratio, iter_step=self.iter_step, log_qua=log_qua)
                     foreground_mask = mask[:, 0] > 0.5
@@ -484,7 +485,8 @@ class Runner:
                 if self.use_depth:
                     loss = color_fine_loss * rgb_scale + \
                            (geo_loss * self.geo_weight + angle_loss * self.angle_weight) * geo_scale + \
-                           (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight + akap_loss * self.akap_weight) * regular_scale + \
+                           (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight + akap_loss * self.akap_weight
+                            + normal_smoothness_loss * self.smooth_weight) * regular_scale + \
                            fs_loss * self.fs_weight + tv_loss * self.tv_weight #+ akap_loss * self.akap_weight
                 else:
                     loss = color_fine_loss + \
@@ -526,6 +528,7 @@ class Runner:
                 self.writer.add_scalar('Loss/tv_loss', tv_loss, self.iter_step)
                 self.writer.add_scalar('Loss/akap_loss', akap_loss, self.iter_step)
                 self.writer.add_scalar('Loss/elastic_loss', elastic_loss, self.iter_step)
+                self.writer.add_scalar('Loss/smoothness_loss', normal_smoothness_loss, self.iter_step)
                 del eikonal_loss
                 del mask_loss
 
