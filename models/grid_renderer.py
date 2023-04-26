@@ -1,9 +1,11 @@
 import torch
+from torch import nn
 import torch.nn.functional as F
 import numpy as np
 import mcubes
 from models.rend_utils import qp_to_sdf, neus_weights, get_sdf_loss
-from models.losses import compute_akap_loss, compute_elastic_loss
+from models.losses import compute_akap_loss, compute_elastic_loss, general_loss_with_squared_residual, get_normal_loss, \
+    ScaleAndShiftInvariantLoss, compute_scale_and_shift
 from pdb import set_trace
 
 
@@ -69,6 +71,29 @@ def sample_pdf(bins, weights, n_samples, det=False):
     return samples
 
 
+class LaplaceDensity(nn.Module):  # alpha * Laplace(loc=0, scale=beta).cdf(-sdf)
+    """Laplace density from VolSDF"""
+
+    def __init__(self, init_val, beta_min=0.0001):
+        super().__init__()
+        self.register_parameter("beta_min", nn.Parameter(beta_min * torch.ones(1), requires_grad=False))
+        self.register_parameter("beta", nn.Parameter(init_val * torch.ones(1), requires_grad=True))
+
+    def forward(self, sdf, beta):
+        """convert sdf value to density value with beta, if beta is missing, then use learable beta"""
+
+        if beta is None:
+            beta = self.get_beta()
+
+        alpha = 1.0 / beta
+        return alpha * (0.5 + 0.5 * sdf.sign() * torch.expm1(-sdf.abs() / beta))
+
+    def get_beta(self):
+        """return current beta value"""
+        beta = self.beta.abs() + self.beta_min
+        return beta
+
+
 # Deform
 class DeformGoSRenderer:
     def __init__(self,
@@ -88,7 +113,7 @@ class DeformGoSRenderer:
                  n_importance,
                  up_sample_steps,
                  perturb,
-                 ):
+                 ndr_color_net=False):
         self.dtype = torch.get_default_dtype()
         # Deform
         self.deform_network = deform_network
@@ -104,11 +129,14 @@ class DeformGoSRenderer:
         self.up_sample_steps = up_sample_steps
         self.perturb = perturb
         self.report_freq = report_freq
+        self.ndr_color = ndr_color_net
         # Grid
         self.feature_grid = feature_grid
         self.volume_origin = volume_origin
         self.volume_dim = volume_dim
         self.rgb_dim = rgb_dim
+
+        self.laplace_density = LaplaceDensity(0.01)
 
     def update_samples_num(self, iter_step, alpha_ratio=0.):
         if iter_step >= self.important_begin_iter:
@@ -206,7 +234,8 @@ class DeformGoSRenderer:
                     rays_l=None,
                     truncation=0.08,
                     back_truncation=0.01,
-                    log_qua=None):
+                    log_qua=None,
+                    gt_normals=None):
         batch_size, n_samples = z_vals.shape
 
         # Section length
@@ -288,13 +317,15 @@ class DeformGoSRenderer:
         # observation space -> canonical space
         gradients_o, pts_jacobian = gradient(deform_network, ambient_network, sdf_network, deform_code, pts,
                                              alpha_ratio, volume_origin=self.volume_origin, volume_dim=self.volume_dim,
-                                             feature_grid=self.feature_grid, log_qua=log_qua)
+                                             feature_grid=self.feature_grid, log_qua=log_qua, rgb_dim=self.rgb_dim)
         dirs_c = torch.bmm(pts_jacobian, dirs_o.unsqueeze(-1)).squeeze(-1)  # view in observation space
         dirs_c = dirs_c / torch.linalg.norm(dirs_c, ord=2, dim=-1, keepdim=True)
         # they also use the pts_canonical (why), normals, view_dir
-        #sampled_color = color_network(appearance_code, pts_canonical, gradients_o, \
-        #                              dirs_c, feature_vector, alpha_ratio).reshape(batch_size, n_samples, 3)
-        sampled_color = torch.sigmoid(color_network(feature_vector, dirs_c)).reshape(batch_size, n_samples, 3)
+        if self.ndr_color:
+            sampled_color = color_network(appearance_code, pts_canonical, gradients_o, \
+                                      dirs_c, feature_vector, alpha_ratio).reshape(batch_size, n_samples, 3)
+        else:
+            sampled_color = torch.sigmoid(color_network(feature_vector, dirs_c)).reshape(batch_size, n_samples, 3)
 
         inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)
         inv_s = inv_s.expand(batch_size * n_samples, 1)
@@ -337,14 +368,32 @@ class DeformGoSRenderer:
         gradient_o_error = (torch.linalg.norm(gradients_o.reshape(batch_size, n_samples, 3), ord=2,
                                               dim=-1) - 1.0) ** 2
         relax_inside_sphere_sum = relax_inside_sphere.sum() + 1e-5
-        gradient_o_error = (relax_inside_sphere * gradient_o_error).sum() / relax_inside_sphere_sum
+        #gradient_o_error = (relax_inside_sphere * gradient_o_error).sum() / relax_inside_sphere_sum
+        gradient_o_error = gradient_o_error.mean()
         if rays_l is not None:
-            fs_loss, sdf_loss = get_sdf_loss(mid_z_vals, rays_l, sdf.reshape(batch_size, n_samples), truncation, back_truncation)
+            #rays_l = rays_l * 50 + 0.5
+            #scale, shift = compute_scale_and_shift(sdf.reshape(batch_size, n_samples)[..., None],
+            #                                       rays_l.repeat_interleave(n_samples, 1)[..., None],
+            #                                       #torch.ones((batch_size, n_samples, 1)))
+            #                                       inside_sphere[..., None])
+            #sdf_pred = scale.view(-1, 1) * sdf.reshape(batch_size, n_samples) + shift.view(-1, 1)
+            sdf_pred = sdf.reshape(batch_size, n_samples)
+            fs_loss, sdf_loss = get_sdf_loss(mid_z_vals, rays_l, sdf_pred, truncation, back_truncation, inside_sphere)
         else:
             fs_loss, sdf_loss = 0., 0.
 
         akap_loss = compute_akap_loss(pts_jacobian)
-        elastic_loss, residual = compute_elastic_loss(pts_jacobian)
+        elastic_loss, residual = 0.0, 0.0 #compute_elastic_loss(pts_jacobian)
+
+        pred_normals = gradients_o.reshape(batch_size, n_samples, 3) * weights[:, :n_samples, None]
+        pred_normals = pred_normals * inside_sphere[..., None]
+        pred_normals = pred_normals.sum(dim=1)
+
+        #pred_normals = torch.nn.functional.normalize(pred_normals, p=2, dim=-1)
+        if gt_normals is not None:
+            normal_l1, normal_cos = get_normal_loss(pred_normals, gt_normals)
+        else:
+            normal_l1, normal_cos = 0.0, 0.0
 
         return {
             'pts': pts.reshape(batch_size, n_samples, 3),
@@ -367,13 +416,15 @@ class DeformGoSRenderer:
             'fs_loss': fs_loss,
             'sdf_loss': sdf_loss,
             'akap_loss': akap_loss.mean(),
-            'elastic_loss': elastic_loss.mean(),
+            'elastic_loss': 0.0, #elastic_loss.mean(),
+            'normal_l1': normal_l1,
+            'normal_cos': normal_cos,
         }
 
     # TODO: modify this to work with grid
     def render(self, deform_code, appearance_code, rays_o, rays_d, near, far, perturb_overwrite=-1,
                cos_anneal_ratio=0.0, alpha_ratio=0., iter_step=0, rays_l=None, truncation=0.08, back_truncation=0.01,
-               log_qua=None):
+               log_qua=None, gt_normals=None):
         self.update_samples_num(iter_step, alpha_ratio)
         batch_size = len(rays_o)
         sample_dist = 2.0 / self.n_samples  # Assuming the region of interest is a unit sphere
@@ -441,7 +492,8 @@ class DeformGoSRenderer:
                                     rays_l=rays_l,
                                     truncation=truncation,
                                     back_truncation=back_truncation,
-                                    log_qua=log_qua)
+                                    log_qua=log_qua,
+                                    gt_normals=gt_normals)
 
         weights = ret_fine['weights']
         s_val = ret_fine['s_val'].reshape(batch_size, n_samples).mean(dim=-1, keepdim=True)
@@ -465,6 +517,8 @@ class DeformGoSRenderer:
             'sdf_loss': ret_fine['sdf_loss'],
             'akap_loss': ret_fine['akap_loss'],
             'elastic_loss': ret_fine['elastic_loss'],
+            'normal_l1': ret_fine['normal_l1'],
+            'normal_cos': ret_fine['normal_cos'],
         }
 
     # Depth
@@ -538,17 +592,20 @@ class DeformGoSRenderer:
 
         gradients_o, pts_jacobian = gradient(self.deform_network, self.ambient_network, self.sdf_network, deform_code,
                                              pts, alpha_ratio, volume_origin=self.volume_origin, volume_dim=self.volume_dim,
-                                             feature_grid=self.feature_grid, log_qua=log_qua)
+                                             feature_grid=self.feature_grid, log_qua=log_qua, rgb_dim=self.rgb_dim)
         dirs_c = torch.bmm(pts_jacobian, rays_d.unsqueeze(-1)).squeeze(-1)  # view in observation space
         dirs_c = dirs_c / torch.linalg.norm(dirs_c, ord=2, dim=-1, keepdim=True)
-        #color = self.color_network(appearance_code, pts_canonical, gradients_o, \
-        #                           dirs_c, feature_vector, alpha_ratio)
-        color = torch.sigmoid(self.color_network(feature_vector, dirs_c))
+        if self.ndr_color:
+            color = self.color_network(appearance_code, pts_canonical, gradients_o, \
+                                   dirs_c, feature_vector, alpha_ratio)
+        else:
+            color = torch.sigmoid(self.color_network(feature_vector, dirs_c))
 
         return color, gradients_o
 
     # Depth
-    def errorondepth(self, deform_code, rays_o, rays_d, rays_s, mask, alpha_ratio=0., iter_step=0, log_qua=None):
+    def errorondepth(self, deform_code, rays_o, rays_d, rays_s, mask, alpha_ratio=0., iter_step=0, log_qua=None,
+                     smooth_std=0.01):
         pts = rays_o + rays_s
         pts_canonical = self.deform_network(deform_code, pts, alpha_ratio, log_qua)
         ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio)
@@ -593,10 +650,22 @@ class DeformGoSRenderer:
         sdf_error = F.l1_loss(sdf, torch.zeros_like(sdf), reduction='sum') / inside_masksphere_sum
         angle_error = 0.0 #F.l1_loss(relu_cos, torch.zeros_like(relu_cos), reduction='sum') / inside_masksphere_sum
 
+        surface_points_neig = pts + (torch.rand_like(pts) - 0.5) * smooth_std
+        pp = torch.cat([pts, surface_points_neig], dim=0)
+        surface_grad = gradient_obs(self.deform_network, self.ambient_network, self.sdf_network, deform_code, pp,
+                                    alpha_ratio, self.volume_origin, self.volume_dim, self.feature_grid, rgb_dim=self.rgb_dim,
+                                    log_qua=log_qua)
+        surface_points_normal = torch.nn.functional.normalize(surface_grad, p=2, dim=-1)
+
+        N = surface_points_normal.shape[0] // 2
+
+        diff_norm = torch.norm(surface_points_normal[:N] - surface_points_normal[N:], dim=-1)
+        #normal_smoothness_loss = general_loss_with_squared_residual(diff_norm, alpha=-2., scale=3.9).sum()
+        normal_smoothness_loss = torch.mean(diff_norm)
         if iter_step % self.report_freq == 0:
             print('Invertibility evaluation: ', torch.abs((pts_back - pts) * inside_masksphere).max().data.item())
 
-        return sdf_error, angle_error, inside_masksphere
+        return sdf_error, angle_error, inside_masksphere, normal_smoothness_loss
 
     def extract_canonical_geometry(self, bound_min, bound_max, resolution, threshold=0.0, alpha_ratio=0.0):
         return extract_geometry(bound_min,

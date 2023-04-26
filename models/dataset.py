@@ -4,12 +4,11 @@ import cv2 as cv
 import numpy as np
 import os
 from glob import glob
+import re
 from scipy.spatial.transform import Rotation as Rot
 from scipy.spatial.transform import Slerp
 import logging
-
 from .LieAlgebra import se3
-
 
 
 # This function is based upon IDR: https://github.com/lioryariv/idr
@@ -37,6 +36,53 @@ def load_K_Rt_from_P(filename, P=None):
     return intrinsics, pose
 
 
+def read_pfm(path):
+    """Read pfm file.
+    Args:
+        path (str): path to file
+    Returns:
+        tuple: (data, scale)
+    """
+    with open(path, "rb") as file:
+
+        color = None
+        width = None
+        height = None
+        scale = None
+        endian = None
+
+        header = file.readline().rstrip()
+        if header.decode("ascii") == "PF":
+            color = True
+        elif header.decode("ascii") == "Pf":
+            color = False
+        else:
+            raise Exception("Not a PFM file: " + path)
+
+        dim_match = re.match(r"^(\d+)\s(\d+)\s$", file.readline().decode("ascii"))
+        if dim_match:
+            width, height = list(map(int, dim_match.groups()))
+        else:
+            raise Exception("Malformed PFM header.")
+
+        scale = float(file.readline().decode("ascii").rstrip())
+        if scale < 0:
+            # little-endian
+            endian = "<"
+            scale = -scale
+        else:
+            # big-endian
+            endian = ">"
+
+        data = np.fromfile(file, endian + "f")
+        shape = (height, width, 3) if color else (height, width)
+
+        data = np.reshape(data, shape)
+        data = np.flipud(data)
+
+        return data, scale
+
+
 class Dataset:
     def __init__(self, conf):
         super(Dataset, self).__init__()
@@ -54,9 +100,11 @@ class Dataset:
         self.object_cameras_name = conf.get_string('object_cameras_name')
 
         self.camera_outside_sphere = conf.get_bool('camera_outside_sphere', default=True)
+        self.bilateral_depth = conf.get_bool('bilateral_depth', default=False)
         self.scale_mat_scale = conf.get_float('scale_mat_scale', default=1.1)
         self.trainskip = conf['trainskip']
         self.max_length = conf['max_length']
+        image_size = 384
 
         camera_dict = np.load(os.path.join(self.data_dir, self.render_cameras_name))
         self.camera_dict = camera_dict
@@ -72,12 +120,87 @@ class Dataset:
         if len(self.masks_lis) == 0:
             self.masks_lis = sorted(glob(os.path.join(self.data_dir, 'mask/*.png')))[:self.max_length]
         #self.masks_np = np.stack([cv.imread(im_name) for im_name in self.masks_lis]) / 256.0
-        self.masks_np = np.stack([cv.imread(self.masks_lis[im_idx]) for im_idx in
+        self.masks_np = np.stack([cv.imread(self.masks_lis[im_idx])
+                                             for im_idx in
                                   range(0, len(self.masks_lis), self.trainskip)]) / 256.0
+
+        # world_mat is a projection matrix from world to image
+        # self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
+        self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in
+                              range(0, self.n_images, self.trainskip)]
+
+        self.scale_mats_np = []
+
+        # scale_mat: used for coordinate normalization, we assume the scene to render is inside a unit sphere at origin.
+        # self.scale_mats_np = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
+        self.scale_mats_np = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in
+                              range(0, self.n_images, self.trainskip)]
 
         # Depth
         self.use_depth = conf.get_bool('use_depth')
-        if self.use_depth:
+        self.depth_images = []
+        self.normal_images = []
+        self.use_pred_depth = conf.get_bool('use_pred_depth')
+        #self.use_pred_normal = conf.get_bool('use_pred_normal')
+        if self.use_pred_depth:
+            self.depth_paths = sorted(glob(os.path.join(self.data_dir, 'depth_pred2/*.npy')))[:self.max_length]
+            #self.depth_paths = sorted(glob(os.path.join(self.data_dir, 'depth_midas/*.pfm')))[:self.max_length]
+            if len(self.depth_paths) == 0:
+                self.depth_paths = sorted(glob(os.path.join(self.data_dir, 'depth_pred2/*.npy')))[:self.max_length]
+            self.normal_paths = sorted(glob(os.path.join(self.data_dir, 'normal_pred2/*.npy')))[:self.max_length]
+            if len(self.normal_paths) == 0:
+                self.normal_paths = sorted(glob(os.path.join(self.data_dir, 'normal_pred2/*.npy')))[:self.max_length]
+            scale_mat, world_mat = self.scale_mats_np[0], self.world_mats_np[0]
+            camera_to_worlds = world_mat @ scale_mat
+            camera_to_worlds = torch.from_numpy(camera_to_worlds).float()
+            for dpath, npath in zip(self.depth_paths, self.normal_paths):
+                depth = np.load(dpath)
+                depth = (depth - depth.min()) / (depth.max() - depth.min()) # * 0.8 + 0.1
+                #depth = cv.cvtColor(cv.imread(dpath), cv.COLOR_RGB2GRAY)
+                #depth, scale = read_pfm(dpath)
+                #depth = np.array(depth, dtype=np.float32)
+                #self.depth_images.append(torch.from_numpy(depth.reshape(-1, 1)).float())
+                #self.depth_images.append(torch.from_numpy(depth).float())
+
+                normal = np.load(npath)
+                #normal = normal.reshape(3, -1).transpose(1, 0)
+                #normal = normal.swapaxes(0, 1).swapaxes(1, 2)
+                # important as the output of omnidata is normalized
+                normal = normal * 2. - 1.
+                normal = torch.from_numpy(normal).float()
+                # transform normal to world coordinate system
+                rot = camera_to_worlds[:3, :3].clone()
+
+                normal_map = normal.reshape(3, -1)
+                normal_map = torch.nn.functional.normalize(normal_map, p=2, dim=0)
+
+                normal_map = rot @ normal_map
+                normal_map = normal_map.permute(1, 0).reshape(*normal.shape[1:], 3)
+                self.normal_images.append(normal_map)
+            #self.depths = torch.stack(self.depth_images).to(self.dtype).cpu()
+            #self.depths_np = self.depths.cpu().numpy()
+            self.normals = torch.stack(self.normal_images).to(self.dtype).cpu()
+
+            self.depth_scale = conf.get_float('depth_scale', default=1000.)
+            self.depths_lis = sorted(glob(os.path.join(self.data_dir, 'depth/*.jpg')))[:self.max_length]
+            if len(self.depths_lis) == 0:
+                self.depths_lis = sorted(glob(os.path.join(self.data_dir, 'depth/*.png')))[:self.max_length]
+            # self.depths_np = np.stack([cv.imread(im_name, cv.IMREAD_UNCHANGED) for im_name in self.depths_lis]) / self.depth_scale
+            self.depths_np = np.stack([cv.imread(self.depths_lis[im_idx], cv.IMREAD_UNCHANGED) for im_idx in
+                                       range(0, len(self.depths_lis), self.trainskip)]) / self.depth_scale
+            # self.depths_np[self.depths_np == 0] = -1.  # avoid nan values
+            #self.depths_np = (self.depths_np - self.depths_np.min(axis=(1, 2))[:, None, None]) / \
+            #                 (self.depths_np.max(axis=(1, 2))[:, None, None] - self.depths_np.min(axis=(1, 2))[:, None,
+            #                                                                   None])  # * 9.9 + 0.1
+            if self.bilateral_depth:
+                # apply a bilateral filter to smooth the depth map
+                self.depths_np = self.depths_np.astype(np.float32)
+                self.depths_np = np.stack([cv.bilateralFilter(self.depths_np[x], 10, 0, 10) for x in
+                                           range(self.depths_np.shape[0])])
+            self.depths_np[self.depths_np == 0.] = -1.  # avoid nan values
+            self.depths = torch.from_numpy(self.depths_np.astype(np.float32)).to(self.dtype).cpu()
+
+        elif self.use_depth:
             self.depth_scale = conf.get_float('depth_scale', default=1000.)
             self.depths_lis = sorted(glob(os.path.join(self.data_dir, 'depth/*.jpg')))[:self.max_length]
             if len(self.depths_lis) == 0:
@@ -85,20 +208,16 @@ class Dataset:
             #self.depths_np = np.stack([cv.imread(im_name, cv.IMREAD_UNCHANGED) for im_name in self.depths_lis]) / self.depth_scale
             self.depths_np = np.stack([cv.imread(self.depths_lis[im_idx], cv.IMREAD_UNCHANGED) for im_idx in
                                        range(0, len(self.depths_lis), self.trainskip)]) / self.depth_scale
-            self.depths_np[self.depths_np == 0] = -1. # avoid nan values
+            #self.depths_np[self.depths_np == 0] = -1.  # avoid nan values
+            #self.depths_np = (self.depths_np - self.depths_np.min(axis=(1, 2))[:, None, None]) / \
+            #                 (self.depths_np.max(axis=(1, 2))[:, None, None] - self.depths_np.min(axis=(1, 2))[:, None, None]) #* 9.9 + 0.1
+            if self.bilateral_depth:
+                # apply a bilateral filter to smooth the depth map
+                self.depths_np = self.depths_np.astype(np.float32)
+                self.depths_np = np.stack([cv.bilateralFilter(self.depths_np[x], 10, 0, 10) for x in
+                                           range(self.depths_np.shape[0])])
+            self.depths_np[self.depths_np == 0.] = -1.  # avoid nan values
             self.depths = torch.from_numpy(self.depths_np.astype(np.float32)).to(self.dtype).cpu()
-
-        # world_mat is a projection matrix from world to image
-        #self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
-        self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in
-                              range(0, self.n_images, self.trainskip)]
-
-        self.scale_mats_np = []
-
-        # scale_mat: used for coordinate normalization, we assume the scene to render is inside a unit sphere at origin.
-        #self.scale_mats_np = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
-        self.scale_mats_np = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in
-                              range(0, self.n_images, self.trainskip)]
 
         intrinsics_all = []
         poses_all = []
@@ -272,6 +391,9 @@ class Dataset:
         # grid_sample: sample image on (x_i, y_i)
         mask = F.grid_sample(mask, npixels, mode='nearest', padding_mode='border', align_corners=True).squeeze()[...,None] # W, H, 1
         depth = F.grid_sample(depth, npixels, padding_mode='border', align_corners=True).squeeze()[...,None] # W, H, 1
+        if self.use_pred_depth:
+            normal = self.normals[img_idx][None,None,...].to(self.device) # 1, 1, H, W
+            #normal = F.grid_sample(normal, npixels, padding_mode='border', align_corners=True).squeeze() # W, H, 1
         p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1) # W, H, 3
         p_d = p.clone().detach()
         # Camera
@@ -330,6 +452,9 @@ class Dataset:
         color = color[(pixels_y, pixels_x)] # batch_size, 3
         mask = mask[(pixels_y, pixels_x)] # batch_size, 3
         depth = depth[(pixels_y, pixels_x)][..., None] # batch_size, 1
+        if self.use_pred_depth:
+            normal = self.normals[img_idx].to(self.device) # batch_size, 3
+            normal = normal[(pixels_y, pixels_x)]  # batch_size, 3
         p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1).to(self.dtype) # batch_size, 3
         p_d = p.clone().detach()
         # pixel -> camera -> normalization space (w/o pose). ps: 'pose' is a gap between camera and world
@@ -344,14 +469,22 @@ class Dataset:
                 intrinsic_inv = self.intrinsics_all_inv[img_idx]
                 depth_intrinsic_inv = self.depth_intrinsics_all_inv[img_idx]
             pose = self.poses_all[img_idx]
-        p = torch.matmul(intrinsic_inv[None, :3, :3], p[:, :, None]).squeeze() # batch_size, 3
-        rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True) # batch_size, 3
-        rays_v = torch.matmul(pose[None, :3, :3], rays_v[:, :, None]).squeeze() # batch_size, 3
+        p = torch.matmul(intrinsic_inv[None, :3, :3], p[:, :, None]).squeeze()  # batch_size, 3
+        rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True)  # batch_size, 3
+        rays_v = torch.matmul(pose[None, :3, :3], rays_v[:, :, None]).squeeze()  # batch_size, 3
         p_d = depth * torch.matmul(depth_intrinsic_inv[None, :3, :3], p_d[:, :, None]).squeeze() * self.scales_all[img_idx, :] # batch_size, 3
-        rays_l = torch.linalg.norm(p_d, ord=2, dim=-1, keepdim=True) # batch_size, 1
-        rays_s = torch.matmul(pose[None, :3, :3], p_d[:, :, None]).squeeze() # batch_size, 3
-        rays_o = pose[None, :3, 3].expand(rays_v.shape) # batch_size, 3
-        return torch.cat([rays_o, rays_v, rays_s, rays_l, color, mask[:, :1]], dim=-1) # batch_size, 14
+        if self.use_pred_depth:
+            #rays_l = depth
+            rays_l = torch.linalg.norm(p_d, ord=2, dim=-1, keepdim=True)  # batch_size, 1
+        else:
+            #rays_l = depth
+            rays_l = torch.linalg.norm(p_d, ord=2, dim=-1, keepdim=True)  # batch_size, 1
+        rays_s = torch.matmul(pose[None, :3, :3], p_d[:, :, None]).squeeze()  # batch_size, 3
+        rays_o = pose[None, :3, 3].expand(rays_v.shape)  # batch_size, 3
+        if self.use_pred_depth:
+            return torch.cat([rays_o, rays_v, rays_s, rays_l, color, mask[:, :1], normal], dim=-1)  # batch_size, 17
+        else:
+            return torch.cat([rays_o, rays_v, rays_s, rays_l, color, mask[:, :1]], dim=-1)  # batch_size, 14
 
     def gen_rays_between(self, idx_0, idx_1, ratio, resolution_level=1):
         """
