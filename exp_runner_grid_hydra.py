@@ -13,12 +13,10 @@ from tqdm import tqdm
 from pyhocon import ConfigFactory
 
 from models.dataset import Dataset
-from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, DeformNetwork, AppearanceNetwork, \
-    TopoNetwork, SODeformaNet, GeometryNet, RadianceNet, GeometryNetLat, RadianceNetLat
-from models.renderer import NeuSRenderer, DeformNeuSRenderer
+from models.fields import RenderingNetwork, SingleVarianceNetwork, SODeformaNet
+from models.renderer import NeuSRenderer
 from models.grid_renderer import DeformGoSRenderer
-from models.multi_grid import MultiGrid, GaussianMultiGrid, GCNMultiGrid, EdgeCNMultiGrid, DEdgeCNMultiGrid
-#from models.encodings import TensorVMEncoding
+from models.multi_grid import MultiGrid
 from models.rend_utils import coordinates, qp_to_sdf
 from models.utils import TVLoss
 from models.losses import ScaleAndShiftInvariantLoss
@@ -39,7 +37,6 @@ class Runner:
         self.conf = conf
         self.base_dir = f'{self.conf.general.base_dir}'
         self.base_exp_dir = f'{self.base_dir}{self.conf.general.base_exp_dir}{case}/result'
-        #self.conf_path = f'{self.base_dir}/{config_path}/{config_name}'
         os.makedirs(self.base_exp_dir, exist_ok=True)
         self.dataset = Dataset(ConfigFactory.from_dict(dict(self.conf['dataset'])))
         self.iter_step = 0
@@ -53,7 +50,6 @@ class Runner:
             self.deform_dim = self.conf.deformation_network.d_feature
             self.deform_codes = torch.randn(self.dataset.n_loaded_images, self.deform_dim, requires_grad=True).to(
                 self.device)
-            #self.appearance_dim = self.conf.model.appearance_rendering_network.d_global_feature
             self.appearance_dim = self.conf.deformation_network.d_feature
             self.appearance_codes = torch.randn(self.dataset.n_loaded_images, self.appearance_dim,
                                                 requires_grad=True).to(self.device)
@@ -128,20 +124,14 @@ class Runner:
         # Deform
         if self.use_deform:
             if self.use_bijective:
-                #self.deform_network = DeformNetwork(**self.conf['model.deform_network']).to(self.device)
                 self.deform_network = hydra.utils.instantiate(self.conf.deformation_network).to(self.device)
             else:
                 self.deform_network = SODeformaNet(**self.conf['model.deform_network']).to(self.device)
-            #self.topo_network = TopoNetwork(**self.conf['model.topo_network']).to(self.device)
             self.topo_network = hydra.utils.instantiate(self.conf.topo_network).to(self.device)
-        # self.sdf_network = SDFNetwork(**self.conf['model.sdf_network']).to(self.device)
-        #self.sdf_network = GeometryNet(**self.conf['model.sdf_network']).to(self.device)
         self.sdf_network = hydra.utils.instantiate(self.conf.sdf_network).to(self.device)
         self.deviation_network = SingleVarianceNetwork(**self.conf.model.variance_network).to(self.device)
         # Deform
         if self.use_deform:
-            # self.color_network = AppearanceNetwork(**self.conf['model.appearance_rendering_network']).to(self.device)
-            #self.color_network = RadianceNet(**self.conf['model.rendering_network']).to(self.device)
             self.color_network = hydra.utils.instantiate(self.conf.rendering_network).to(self.device)
         else:
             self.color_network = RenderingNetwork(**self.conf['model.rendering_network']).to(self.device)
@@ -150,7 +140,6 @@ class Runner:
         self.volume_origin = None
         self.volume_max = None
         self.volume_dim = None
-        # xyz_min, xyz_max = torch.tensor([-1.05, -1.05, -1.05]), torch.tensor([1.05, 1.05, 1.05])
         xyz_min = torch.tensor(self.dataset.object_bbox_min, dtype=self.dtype)
         xyz_max = torch.tensor(self.dataset.object_bbox_max, dtype=self.dtype)
         self.init_volume_dims(xyz_min, xyz_max)
@@ -235,11 +224,8 @@ class Runner:
         # Backup codes and configs
         if self.mode[:5] == 'train':
             self.file_backup()
-            # self.geom_init(2.1/5)
             if not self.is_continue:
-                # self.geom_init(2.1/2.3)
                 self.geom_init(2.1 / 4.)
-                #pass
 
     def update_and_create_optimizer(self):
         optim_param_groups = self.optimizer.param_groups
@@ -302,20 +288,11 @@ class Runner:
             voxel_dims.append(torch.tensor([res + 1] * 3, device=self.device))
         self.world_size = voxel_dims
         voxel_dims = torch.stack(voxel_dims, 0)
-        # init_feat = torch.rand(1, torch.tensor(feat_dims).sum(), device=self.device) * 0.02 - 0.01
         init_feat = torch.zeros(1, torch.tensor(feat_dims).sum(), device=self.device)
         if self.grid_type == 'normal':
             return MultiGrid(voxel_dims, init_feat, feat_dims)
-        elif self.grid_type == 'Gaussian':
-            return GaussianMultiGrid(voxel_dims, init_feat, feat_dims)
-        elif self.grid_type == 'GCN':
-            return GCNMultiGrid(voxel_dims, init_feat, feat_dims)
-        elif self.grid_type == 'EdgeCN':
-            return EdgeCNMultiGrid(voxel_dims, init_feat, feat_dims)
-        elif self.grid_type == 'DEdgeCN':
-            return DEdgeCNMultiGrid(voxel_dims, init_feat, feat_dims)
-        #elif self.grid_type == 'TensoRF_VM':
-        #    return TensorVMEncoding(128, 11, smoothstep=True)
+        else:
+            raise ValueError('Not defined grid type.')
 
     def _set_grid_resolution(self, feat_scale):
         # Determine grid resolution
@@ -338,12 +315,6 @@ class Runner:
         for vol in volums:
             total = total + self.tv_loss_fn(vol)
         return total
-
-    # depth loss based on ScaleAndShiftInvariantLoss
-    def get_depth_loss(self, depth_pred, depth_gt, mask):
-        # TODO remove hard-coded scaling for depth
-        return self.depth_loss(depth_pred.reshape(1, 32, 32), (depth_gt).reshape(1, 32, 32), #(depth_gt * 20 + 0.5).reshape(1, 32, 32),
-                                   mask.reshape(1, 32, 32))
 
     def geom_init(self, radius=1.5, chunk=500000):
         optimizer = torch.optim.Adam([
@@ -423,9 +394,7 @@ class Runner:
                 if iter_i == 0:
                     print('The files will be saved in:', self.base_exp_dir)
                     print('Used GPU:', self.gpu)
-                    #self.validate_observation_mesh(self.validate_idx)
-                    # self.validate_canonical_mesh()
-                    #self.validate_all_mesh()
+                    self.validate_observation_mesh(self.validate_idx)
 
                 if iter_i in self.pg_scale:
                     with torch.no_grad():
@@ -506,15 +475,9 @@ class Runner:
                 eikonal_loss = gradient_o_error
 
                 mask_loss = F.binary_cross_entropy(weight_sum.clip(1e-5, 1.0 - 1e-5), mask)
-                #mask_loss = 0.0 #F.binary_cross_entropy(weight_sum.clip(1e-5, 1.0 - 1e-3), mask)
                 # Depth
                 if self.use_depth or self.use_pred_depth:
                     if self.use_pred_depth:
-                        #depth_loss = self.get_depth_loss(depth_map, rays_l, valid_depth_region)
-                        #depth_loss, scale_loss = self.get_depth_loss(depth_map, rays_l, mask)  #* 0.2  # hard value to make the loss ~ 1.1
-                        #depth_loss, scale_loss = self.get_depth_loss(depth_map, rays_l, torch.ones_like(rays_l))  #* 0.2  # hard value to make the loss ~ 1.1
-                        # until we fix the valid_depth_mask
-
                         depth_minus = (depth_map - rays_l) * valid_depth_region
                         depth_loss = F.l1_loss(depth_minus, torch.zeros_like(depth_minus), reduction='sum') \
                                     / (valid_depth_region.sum() + 1e-5)
@@ -524,21 +487,21 @@ class Runner:
                         depth_loss = F.l1_loss(depth_minus, torch.zeros_like(depth_minus), reduction='sum') \
                                      / (valid_depth_region.sum() + 1e-5)
                         scale_loss = 0.0
-                        #depth_loss, scale_loss = self.get_depth_loss(depth_map, rays_l, mask)  # * 0.2  # hard value to make the loss ~ 1.1
+
                     if self.iter_step < self.important_begin_iter:
-                        rgb_scale = self.rgb_scale[0]  # 0.1
-                        geo_scale = self.geo_scale[0]  # 10.0
-                        regular_scale = self.regular_scale[0]  # 10.0
+                        rgb_scale = self.rgb_scale[0]
+                        geo_scale = self.geo_scale[0]
+                        regular_scale = self.regular_scale[0]
                         geo_loss = sdf_loss
                     elif self.iter_step < self.max_pe_iter:
-                        rgb_scale = self.rgb_scale[1]  # 1.0
-                        geo_scale = self.geo_scale[1]  # 1.0
-                        regular_scale = self.regular_scale[1]  # 10.0
+                        rgb_scale = self.rgb_scale[1]
+                        geo_scale = self.geo_scale[1]
+                        regular_scale = self.regular_scale[1]
                         geo_loss = 0.5 * (depth_loss + sdf_loss)
                     else:
-                        rgb_scale = self.rgb_scale[2]  # 1.0
-                        geo_scale = self.geo_scale[2]  # 0.1  # big jump for our case maybe?
-                        regular_scale = self.regular_scale[2]  # 1.0
+                        rgb_scale = self.rgb_scale[2]
+                        geo_scale = self.geo_scale[2]
+                        regular_scale = self.regular_scale[2]
                         geo_loss = 0.5 * (depth_loss + sdf_loss)
                 else:
                     if self.iter_step < self.max_pe_iter:
@@ -548,8 +511,6 @@ class Runner:
 
                 if self.depth_only:
                     geo_loss = depth_loss
-                    #geo_loss = 0.0
-                    #scale_loss = 0.0
 
                 tv_loss = self.tv_loss(self.feature_grid.volumes)
 
@@ -557,15 +518,12 @@ class Runner:
                     loss = color_fine_loss * rgb_scale + \
                            (geo_loss * self.geo_weight + angle_loss * self.angle_weight + 1.0 * scale_loss) * geo_scale + \
                            (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight + akap_loss * self.akap_weight
-                            + normal_smoothness_loss * self.smooth_weight #+ normal_l1 * self.normal_l1_weight
-                            #+ normal_cos * self.normal_cos_weight
-                            ) * regular_scale + fs_loss * self.fs_weight + tv_loss * self.tv_weight + \
+                            + normal_smoothness_loss * self.smooth_weight) * regular_scale + fs_loss * self.fs_weight + \
+                           tv_loss * self.tv_weight + \
                            normal_l1 * self.normal_l1_weight + normal_cos * self.normal_cos_weight
-                    # + akap_loss * self.akap_weight
                 else:
                     loss = color_fine_loss + \
                            (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
-                    # loss = (eikonal_loss * self.igr_weight + mask_loss * self.mask_weight) * regular_scale
 
                 # temporal regularisation
                 N = self.deform_codes.shape[0]
@@ -640,99 +598,27 @@ class Runner:
                 if self.iter_step % len(image_perm) == 0 and not self.sequential_training:
                     image_perm = self.get_image_perm()
 
-            else:
-                if self.iter_step == 0:
-                    self.validate_mesh()
-                data = self.dataset.gen_random_rays_at(image_perm[self.iter_step % len(image_perm)], self.batch_size)
-
-                rays_o, rays_d, true_rgb, mask = data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10]
-                near, far = self.dataset.near_far_from_sphere(rays_o, rays_d)
-
-                if self.mask_weight > 0.0:
-                    mask = (mask > 0.5).to(self.dtype)
-                else:
-                    mask = torch.ones_like(mask)
-
-                mask_sum = mask.sum() + 1e-5
-                render_out = self.renderer.render(rays_o, rays_d, near, far,
-                                                  cos_anneal_ratio=self.get_cos_anneal_ratio())
-
-                color_fine = render_out['color_fine']
-                s_val = render_out['s_val']
-                cdf_fine = render_out['cdf_fine']
-                gradient_error = render_out['gradient_error']
-                weight_max = render_out['weight_max']
-                weight_sum = render_out['weight_sum']
-                sdf_loss = render_out['sdf_loss']
-                fs_loss = render_out['fs_loss']
-
-                # Loss
-                color_error = (color_fine - true_rgb) * mask
-                color_fine_loss = F.l1_loss(color_error, torch.zeros_like(color_error), reduction='sum') / mask_sum
-                psnr = 20.0 * torch.log10(1.0 / (((color_fine - true_rgb) ** 2 * mask).sum() / (mask_sum * 3.0)).sqrt())
-
-                eikonal_loss = gradient_error
-
-                mask_loss = F.binary_cross_entropy(weight_sum.clip(1e-3, 1.0 - 1e-3), mask)
-
-                loss = color_fine_loss + \
-                       eikonal_loss * self.igr_weight + \
-                       mask_loss * self.mask_weight  # + sdf_loss * self.sdf_weight + fs_loss * self.fs_loss
-
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-
-                self.iter_step += 1
-
-                self.writer.add_scalar('Loss/loss', loss, self.iter_step)
-                self.writer.add_scalar('Loss/color_loss', color_fine_loss, self.iter_step)
-                self.writer.add_scalar('Loss/eikonal_loss', eikonal_loss, self.iter_step)
-                del color_fine_loss
-                del eikonal_loss
-                if self.mask_weight > 0.0:
-                    self.writer.add_scalar('Loss/mask_loss', mask_loss, self.iter_step)
-                    del mask_loss
-                self.writer.add_scalar('Statistics/s_val', s_val.mean(), self.iter_step)
-                self.writer.add_scalar('Statistics/cdf', (cdf_fine[:, :1] * mask).sum() / mask_sum, self.iter_step)
-                self.writer.add_scalar('Statistics/weight_max', (weight_max * mask).sum() / mask_sum, self.iter_step)
-                self.writer.add_scalar('Statistics/psnr', psnr, self.iter_step)
-
-                if self.iter_step % self.report_freq == 0:
-                    print('The file have been saved in:', self.base_exp_dir)
-                    print('Used GPU:', self.gpu)
-                    print('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss,
-                                                               self.optimizer.param_groups[0]['lr']))
-
-                if self.iter_step % self.save_freq == 0:
-                    self.save_checkpoint()
-
-                if self.iter_step % self.val_freq == 0:
-                    self.validate_image()
-
-                if self.iter_step % self.val_mesh_freq == 0:
-                    self.validate_mesh()
-
-                self.update_learning_rate()
-
-                if self.iter_step % len(image_perm) == 0 and not self.sequestial_training:
-                    image_perm = self.get_image_perm()
-
             # self.profile.step()
         # self.profile.stop()
 
-    def get_latent_loss(self, prev_ids, next_ids):
+    def get_latent_loss(self, prev_ids, next_ids, use_app_loss=False):
         curr_codes = self.deform_codes.data
         prev_codes = self.deform_codes.data[prev_ids, :]
         next_codes = self.deform_codes.data[next_ids, :]
         deform_temporal_loss = torch.abs(next_codes - curr_codes).mean() + torch.abs(curr_codes - prev_codes).mean()
         deform_code_loss = curr_codes.norm(dim=1).mean()
 
-        #curr_codes = self.model.appearance_code.data
-        #prev_codes = self.model.appearance_code.data[prev_ids, :]
-        #next_codes = self.model.appearance_code.data[next_ids, :]
-        app_temporal_loss = 0.0 #torch.abs(next_codes - curr_codes).mean() + torch.abs(curr_codes - prev_codes).mean()
-        app_code_loss = 0.0 #curr_codes.norm(dim=1).mean()
+        if use_app_loss:
+            #curr_codes = self.model.appearance_code.data
+            #prev_codes = self.model.appearance_code.data[prev_ids, :]
+            #next_codes = self.model.appearance_code.data[next_ids, :]
+            #torch.abs(next_codes - curr_codes).mean() + torch.abs(curr_codes - prev_codes).mean()
+            #curr_codes.norm(dim=1).mean()
+            app_temporal_loss = 0.0
+            app_code_loss = 0.0
+        else:
+            app_temporal_loss = 0.0
+            app_code_loss = 0.0
 
         return deform_temporal_loss, deform_code_loss, app_temporal_loss, app_code_loss
 
@@ -1121,12 +1007,11 @@ class Runner:
 
         bound_min = torch.tensor(self.dataset.object_bbox_min, dtype=self.dtype)
         bound_max = torch.tensor(self.dataset.object_bbox_max, dtype=self.dtype)
-        # bound_min, bound_max = torch.tensor([-1.05, -1.05, -1.05]), torch.tensor([1.05, 1.05, 1.05])
 
         vertices, triangles = \
             self.renderer.extract_observation_geometry(deform_code, bound_min, bound_max, resolution=resolution,
                                                        threshold=threshold,
-                                                       alpha_ratio=1.0,  #max(min(self.iter_step / self.max_pe_iter, 1.), 0.),
+                                                       alpha_ratio=1.0,
                                                        log_qua=log_qua)
         os.makedirs(os.path.join(self.base_exp_dir, filename), exist_ok=True)
 
@@ -1159,19 +1044,11 @@ class Runner:
 
 
 config_paths = ["./confs/ddeform", "./confs/killfusion"]
-#config_names = ['seq004_grid_local.yaml', 'frog_grid_local.yaml', 'seq004_grid.yaml', 'seq004_grid_faster.yaml',
-#                'seq004_grid_ffaster.yaml', 'seq011_grid.yaml', 'seq004_dog_grid.yaml', 'seq004_grid_abl.yaml',
-#                'seq014_grid.yaml', 'seq016_grid.yaml', 'seq026_b1_grid.yaml',
-#                'alex_grid.yaml', 'hat_grid.yaml', 'frog_grid_jade.yaml']
-
 config_names = ['seq004_grid.yaml', 'seq011_grid.yaml',  'seq026_b6_grid.yaml',
                 'alex_grid.yaml', 'hat_grid.yaml', 'frog_grid_jade.yaml', 'frog_grid_priyor2.yaml']
 @hydra.main(config_path=config_paths[1], config_name=config_names[-1])
 def main(cfg):
-    #cfg = eval_str_num(cfg)
-
     print('Welcome to DySurf')
-
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
     FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
@@ -1181,9 +1058,8 @@ def main(cfg):
     torch.cuda.set_device(0)
     mpek = cfg.train.max_pe_iter//1000
     model_name = f'{cfg.case}_grid{cfg.model.feature_grid.type}_mpe{mpek}k_smooth{cfg.train.smooth_weight}_std{cfg.train.smooth_std}' \
-                 f'_topo{cfg.train.use_topo}'
-                 #f'_lattemp{cfg.train.temp_weight}' \
-                 #f'fs{cfg.train.fs_weight}_normal_l1{cfg.train.normal_l1_weight}_cos{cfg.train.normal_cos_weight}'
+                 f'_topo{cfg.train.use_topo}_lattemp{cfg.train.temp_weight}_' \
+                 f'fs{cfg.train.fs_weight}_normal_l1{cfg.train.normal_l1_weight}_cos{cfg.train.normal_cos_weight}'
 
     runner = Runner(cfg, cfg.mode, model_name, cfg.is_continue)
 

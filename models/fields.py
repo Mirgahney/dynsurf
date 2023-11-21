@@ -4,10 +4,7 @@ import numpy as np
 from models.embedder import get_embedder
 from kornia.geometry.conversions import quaternion_log_to_exp
 from models.geometry_utils import rotate_points_with_quaternions
-from models.weight_scheduler import StepLinearWarmpup
-from models.modules import InvertibleConv1x1
 from pdb import set_trace
-#import tinycudann as tcnn
 
 
 class MLP(nn.Module):
@@ -369,7 +366,6 @@ class DeformNetwork(nn.Module):
             mode = i_b % 3
 
             lin = getattr(self, "lin" + str(i_b) + "_c")
-            # interesting! they do a linear residual mapping then concatenate deformation code why??
             deform_code_ib = lin(deformation_code) + deformation_code
             deform_code_ib = deform_code_ib.repeat(samples, 1).reshape(-1, lat_dim)
             #deform_code_ib = deform_code_ib.repeat(batch_size, 1)
@@ -536,243 +532,15 @@ class DeformNetwork(nn.Module):
         return x
 
 
-class GlowDeformNetwork(nn.Module):
+class SODeformaNet(nn.Module):
     def __init__(self,
                  d_feature,
-                 d_in,
+                 d_in,  #
                  d_out_1,
                  d_out_2,
                  n_blocks,
                  d_hidden,
                  n_layers,
-                 skip_in=(4,),
-                 multires=0,
-                 weight_norm=True,
-                 LU_decomposed=False):
-        super(GlowDeformNetwork, self).__init__()
-
-        self.n_blocks = n_blocks
-        self.skip_in = skip_in
-
-        # part a
-        # xy -> z
-        ori_in = d_in - 1
-        dims_in = ori_in
-        dims = [dims_in + d_feature] + [d_hidden for _ in range(n_layers)] + [d_out_1]
-
-        self.embed_fn_1 = None
-
-        if multires > 0:
-            embed_fn, input_ch = get_embedder(multires, input_dims=dims_in)
-            self.embed_fn_1 = embed_fn
-            dims_in = input_ch
-            dims[0] = input_ch + d_feature
-
-        self.num_layers_a = len(dims)
-        for i_b in range(self.n_blocks):
-            for l in range(0, self.num_layers_a - 1):
-                if l + 1 in self.skip_in:
-                    out_dim = dims[l + 1] - dims_in
-                else:
-                    out_dim = dims[l + 1]
-
-                lin = nn.Linear(dims[l], out_dim)
-
-                if l == self.num_layers_a - 2:
-                    torch.nn.init.constant_(lin.bias, 0.0)
-                    torch.nn.init.constant_(lin.weight, 0.0)
-                elif multires > 0 and l == 0:
-                    torch.nn.init.constant_(lin.bias, 0.0)
-                    torch.nn.init.normal_(lin.weight[:, :ori_in], 0.0, np.sqrt(2) / np.sqrt(out_dim))
-                    torch.nn.init.constant_(lin.weight[:, ori_in:], 0.0)
-                elif multires > 0 and l in self.skip_in:
-                    torch.nn.init.constant_(lin.bias, 0.0)
-                    torch.nn.init.normal_(lin.weight[:, :-(dims_in - ori_in)], 0.0, np.sqrt(2) / np.sqrt(out_dim))
-                    torch.nn.init.constant_(lin.weight[:, -(dims_in - ori_in):], 0.0)
-                else:
-                    torch.nn.init.constant_(lin.bias, 0.0)
-                    torch.nn.init.normal_(lin.weight, 0.0, np.sqrt(2) / np.sqrt(out_dim))
-
-                if weight_norm and l < self.num_layers_a - 2:
-                    lin = nn.utils.weight_norm(lin)
-
-                setattr(self, "lin" + str(i_b) + "_a_" + str(l), lin)
-
-        # part b
-        # z -> xy
-        ori_in = 1
-        dims_in = ori_in
-        dims = [dims_in + d_feature] + [d_hidden] + [d_out_2]
-
-        self.embed_fn_2 = None
-
-        if multires > 0:
-            embed_fn, input_ch = get_embedder(multires, input_dims=dims_in)
-            self.embed_fn_2 = embed_fn
-            dims_in = input_ch
-            dims[0] = input_ch + d_feature
-
-        self.num_layers_b = len(dims)
-        for i_b in range(self.n_blocks):
-            for l in range(0, self.num_layers_b - 1):
-                if l + 1 in self.skip_in:
-                    out_dim = dims[l + 1] - dims_in
-                else:
-                    out_dim = dims[l + 1]
-
-                lin = nn.Linear(dims[l], out_dim)
-
-                if l == self.num_layers_b - 2:
-                    torch.nn.init.constant_(lin.bias, 0.0)
-                    torch.nn.init.constant_(lin.weight, 0.0)
-                elif multires > 0 and l == 0:
-                    torch.nn.init.constant_(lin.bias, 0.0)
-                    torch.nn.init.normal_(lin.weight[:, :ori_in], 0.0, np.sqrt(2) / np.sqrt(out_dim))
-                    torch.nn.init.constant_(lin.weight[:, ori_in:], 0.0)
-                elif multires > 0 and l in self.skip_in:
-                    torch.nn.init.constant_(lin.bias, 0.0)
-                    torch.nn.init.normal_(lin.weight[:, :-(dims_in - ori_in)], 0.0, np.sqrt(2) / np.sqrt(out_dim))
-                    torch.nn.init.constant_(lin.weight[:, -(dims_in - ori_in):], 0.0)
-                else:
-                    torch.nn.init.constant_(lin.bias, 0.0)
-                    torch.nn.init.normal_(lin.weight, 0.0, np.sqrt(2) / np.sqrt(out_dim))
-
-                if weight_norm and l < self.num_layers_b - 2:
-                    lin = nn.utils.weight_norm(lin)
-
-                setattr(self, "lin" + str(i_b) + "_b_" + str(l), lin)
-
-        # latent code
-        for i_b in range(self.n_blocks):
-            lin = nn.Linear(d_feature, d_feature)
-            torch.nn.init.constant_(lin.bias, 0.0)
-            torch.nn.init.constant_(lin.weight, 0.0)
-            setattr(self, "lin" + str(i_b) + "_c", lin)
-
-        self.activation = nn.Softplus(beta=100)
-        self.invertable_conv = InvertibleConv1x1(d_in, LU_decomposed=LU_decomposed)
-
-    def forward(self, deformation_code, input_pts, alpha_ratio, log_quan=None):
-        batch_size = input_pts.shape[0]
-        x = input_pts
-        num_rays, lat_dim = deformation_code.shape
-        samples = batch_size // num_rays
-        for i_b in range(self.n_blocks):
-
-            lin = getattr(self, "lin" + str(i_b) + "_c")
-            # interesting! they do a linear residual mapping then concatenate deformation code why??
-            deform_code_ib = lin(deformation_code) + deformation_code
-            deform_code_ib = deform_code_ib.repeat(samples, 1).reshape(-1, lat_dim)
-            #deform_code_ib = deform_code_ib.repeat(batch_size, 1)
-            # part a
-            x = self.invertable_conv(x, reverse=False)
-
-            x_focus = x[:, [2]]
-            x_other = x[:, [0, 1]]
-            x_ori = x_other  # xy
-            if self.embed_fn_1 is not None:
-                # Anneal
-                x_other = self.embed_fn_1(x_other, alpha_ratio)
-            x_other = torch.cat([x_other, deform_code_ib], dim=-1)
-            x = x_other
-            for l in range(0, self.num_layers_a - 1):
-                lin = getattr(self, "lin" + str(i_b) + "_a_" + str(l))
-                if l in self.skip_in:
-                    x = torch.cat([x, x_other], 1) / np.sqrt(2)
-                x = lin(x)
-                if l < self.num_layers_a - 2:
-                    x = self.activation(x)
-
-            x_focus = x_focus - x
-
-            # part b
-            x_focus_ori = x_focus  # z'
-            if self.embed_fn_2 is not None:
-                # Anneal
-                x_focus = self.embed_fn_2(x_focus, alpha_ratio)
-            x_focus = torch.cat([x_focus, deform_code_ib], dim=-1)
-            x = x_focus
-            for l in range(0, self.num_layers_b - 1):
-                lin = getattr(self, "lin" + str(i_b) + "_b_" + str(l))
-                if l in self.skip_in:
-                    x = torch.cat([x, x_focus], 1) / np.sqrt(2)
-                x = lin(x)
-                if l < self.num_layers_b - 2:
-                    x = self.activation(x)
-
-            rot_2d = euler2rot_2dinv(x[:, [0]])
-            trans_2d = x[:, 1:]
-            x_other = torch.bmm(rot_2d, (x_ori - trans_2d)[..., None]).squeeze(-1)
-
-            x = torch.cat([x_other, x_focus_ori], dim=-1)
-
-        return x
-
-    def inverse(self, deformation_code, input_pts, alpha_ratio, log_quan=None):
-        batch_size = input_pts.shape[0]
-        x = input_pts
-        num_rays, lat_dim = deformation_code.shape
-        samples = batch_size // num_rays
-        for i_b in range(self.n_blocks):
-            i_b = self.n_blocks - 1 - i_b  # inverse
-
-            lin = getattr(self, "lin" + str(i_b) + "_c")
-            deform_code_ib = lin(deformation_code) + deformation_code
-            deform_code_ib = deform_code_ib.repeat(samples, 1).reshape(-1, lat_dim)
-            #deform_code_ib = deform_code_ib.repeat(batch_size, 1)
-            # part b
-            x_focus = x[:, [0, 1]]
-            x_other = x[:, [2]]
-            x_ori = x_other  # z'
-
-            if self.embed_fn_2 is not None:
-                # Anneal
-                x_other = self.embed_fn_2(x_other, alpha_ratio)
-            x_other = torch.cat([x_other, deform_code_ib], dim=-1)
-            x = x_other
-            for l in range(0, self.num_layers_b - 1):
-                lin = getattr(self, "lin" + str(i_b) + "_b_" + str(l))
-                if l in self.skip_in:
-                    x = torch.cat([x, x_other], 1) / np.sqrt(2)
-                x = lin(x)
-                if l < self.num_layers_b - 2:
-                    x = self.activation(x)
-
-            rot_2d = euler2rot_2d(x[:, [0]])
-            trans_2d = x[:, 1:]
-            x_focus = torch.bmm(rot_2d, x_focus[..., None]).squeeze(-1) + trans_2d
-
-            # part a
-            x_focus_ori = x_focus  # xy
-            if self.embed_fn_1 is not None:
-                # Anneal
-                x_focus = self.embed_fn_1(x_focus, alpha_ratio)
-            x_focus = torch.cat([x_focus, deform_code_ib], dim=-1)
-            x = x_focus
-            for l in range(0, self.num_layers_a - 1):
-                lin = getattr(self, "lin" + str(i_b) + "_a_" + str(l))
-                if l in self.skip_in:
-                    x = torch.cat([x, x_focus], 1) / np.sqrt(2)
-                x = lin(x)
-                if l < self.num_layers_a - 2:
-                    x = self.activation(x)
-
-            x_other = x_ori + x
-            x = torch.cat([x_focus_ori, x_other], dim=-1)
-            x = self.invertable_conv(x, reverse=True)
-
-        return x
-
-
-class SODeformaNet(nn.Module):
-    def __init__(self,
-                 d_feature,  # input_lat_ch
-                 d_in,  #
-                 d_out_1,
-                 d_out_2,
-                 n_blocks,  # [D]
-                 d_hidden,  # W
-                 n_layers,  # D
                  skip_in=(4,),
                  multires=0,
                  weight_norm=True
@@ -870,13 +638,13 @@ class SODeformaNet(nn.Module):
 
 class DeformationNetSE3(nn.Module):
     def __init__(self,
-                 d_feature,  # input_lat_ch
+                 d_feature,
                  d_in,  #
                  d_out_1,
                  d_out_2,
-                 n_blocks,  # [D]
-                 d_hidden,  # W
-                 n_layers,  # D
+                 n_blocks,
+                 d_hidden,
+                 n_layers,
                  skip_in=(4,),
                  multires=0,
                  weight_norm=True,
@@ -916,25 +684,6 @@ class DeformationNetSE3(nn.Module):
 
         self.layers = nn.ModuleList(layers)
 
-        #tiny_config_net_l1 = {
-        #    "otype": "FullyFusedMLP",
-        #    "activation": "ReLU",
-        #    "output_activation": "None",
-        #    "n_neurons": W,
-        #    "n_hidden_layers": self.skips[0],
-        #}
-        #self.tiny_net_l1 = tcnn.Network(n_input_dims=input_ch, n_output_dims=W,
-        #                              network_config=tiny_config_net_l1)
-        #tiny_config_net_l2 = {
-        #    "otype": "FullyFusedMLP",
-        #    "activation": "ReLU",
-        #    "output_activation": "None",
-        #    "n_neurons": W,
-        #    "n_hidden_layers": D - self.skips[0],
-        #}
-        #self.tiny_net_l2 = tcnn.Network(n_input_dims=input_ch + W, n_output_dims=9,
-        #                                network_config=tiny_config_net_l2)
-
     def forward(self, t, x, alpha_ratio=0., log_quan=None, return_pe=False):
         batch_size = x.shape[0]
         t = t.repeat(batch_size, 1)
@@ -951,10 +700,6 @@ class DeformationNetSE3(nn.Module):
             if i in self.skips:
                 h = torch.cat([h, feat], dim=-1)
             h = self.layers[i](h)
-
-        #h = self.tiny_net_l1(h)
-        #h = torch.cat([h, feat], dim=-1)
-        #h = self.tiny_net_l2(h)
 
         #######################################################
         # Apply SE(3) transformation to input point xyz
@@ -1041,8 +786,6 @@ class TopoNetwork(nn.Module):
         self.use_topo = use_topo
         self.total_iters = total_iters
         self.pg_scale = pg_scale
-        # init_value, T_max, start_step=0,
-        self.warmup = StepLinearWarmpup(init_value=d_out*[0], T_max=pg_scale[-1], start_step=pg_scale[0])
 
         if multires > 0:
             embed_fn, input_ch = get_embedder(multires, input_dims=d_in)
@@ -1103,8 +846,6 @@ class TopoNetwork(nn.Module):
 
                 if l < self.num_layers - 2:
                     x = self.activation(x)
-
-            #x = x * self.warmup.get_weight(iter_step).to(x.device)
 
             return x
         else:
