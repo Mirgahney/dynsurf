@@ -1,4 +1,6 @@
 # adopted from pytorch scheduler
+import torch
+
 import math
 from collections import Counter
 from bisect import bisect_right
@@ -299,3 +301,33 @@ class MultiStepLR():
         milestones = list(sorted(self.milestones.elements()))
         return [base_w * self.gamma ** bisect_right(milestones, epoch)
                 for base_w in self.base_weights]
+
+
+class StepLinearWarmpup():
+
+    def __init__(self, init_value:list, T_max, start_step=0, eta_min=1.0, last_epoch=-1, verbose=False):
+        self.T_max = (T_max-start_step)
+        self.eta_min = eta_min
+        self.base_weights = init_value
+        self.last_epoch = last_epoch
+        self.start_step = start_step
+
+    def get_weight(self, epoch):
+
+        if epoch <= self.start_step:
+            return torch.Tensor(self.base_weights)
+        elif epoch > self.T_max:
+            return torch.Tensor([self.eta_min for base_w in self.base_weights])
+        else:
+            return self._get_closed_form_w(epoch - self.start_step)
+
+    def _check_min(self, w, epoch):
+        if epoch > self.T_max:
+            return self.eta_min if w >= self.eta_min else w
+        else:
+            return w
+
+    def _get_closed_form_w(self, epoch):
+        return torch.Tensor([self.eta_min + (base_w - self.eta_min) *
+                (1 + math.sin(math.pi * epoch / self.T_max + math.pi / 2)) / 2
+                for base_w in self.base_weights])

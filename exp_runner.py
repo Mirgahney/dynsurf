@@ -792,3 +792,11 @@ if __name__ == '__main__':
         else:
             runner.validate_mesh(world_space=False, resolution=512, threshold=args.mcube_threshold)
             runner.validate_all_image(resolution_level=1)
+    elif args.mode == 'train_valid':
+        runner.train()
+        if runner.use_deform:
+            runner.validate_all_mesh(world_space=False, resolution=512, threshold=args.mcube_threshold)
+            runner.validate_all_image(resolution_level=1)
+        else:
+            runner.validate_mesh(world_space=False, resolution=512, threshold=args.mcube_threshold)
+            runner.validate_all_image(resolution_level=1)

@@ -17,7 +17,7 @@ from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, D
     TopoNetwork, SODeformaNet, GeometryNet, RadianceNet, GeometryNetLat, RadianceNetLat
 from models.renderer import NeuSRenderer, DeformNeuSRenderer
 from models.grid_renderer import DeformGoSRenderer
-from models.multi_grid import MultiGrid, GaussianMultiGrid
+from models.multi_grid import MultiGrid, GaussianMultiGrid, GCNMultiGrid, EdgeCNMultiGrid, DEdgeCNMultiGrid
 #from models.encodings import TensorVMEncoding
 from models.rend_utils import coordinates, qp_to_sdf
 from models.utils import TVLoss
@@ -25,6 +25,7 @@ from models.losses import ScaleAndShiftInvariantLoss
 from models.weight_scheduler import CosineAnnealingW2
 import hydra
 from omegaconf import OmegaConf
+#from evaluation.generate_video import generate_video
 from pdb import set_trace
 
 
@@ -65,6 +66,7 @@ class Runner:
         # Training parameters
         self.end_iter = self.conf.train.end_iter
         self.important_begin_iter = self.conf.model.neus_renderer.important_begin_iter
+        self.sequential_training = self.conf.train.sample_sequential
         # Anneal
         self.max_pe_iter = self.conf.train.max_pe_iter
 
@@ -224,7 +226,7 @@ class Runner:
                     if model_name[-3:] == 'pth' and int(model_name[5:-4]) <= self.end_iter:
                         model_list.append(model_name)
                 model_list.sort()
-                latest_model_name = model_list[-1]
+                latest_model_name = model_list[-2] #[-1]
 
         if latest_model_name is not None:
             logging.info('Find checkpoint: {}'.format(latest_model_name))
@@ -306,6 +308,12 @@ class Runner:
             return MultiGrid(voxel_dims, init_feat, feat_dims)
         elif self.grid_type == 'Gaussian':
             return GaussianMultiGrid(voxel_dims, init_feat, feat_dims)
+        elif self.grid_type == 'GCN':
+            return GCNMultiGrid(voxel_dims, init_feat, feat_dims)
+        elif self.grid_type == 'EdgeCN':
+            return EdgeCNMultiGrid(voxel_dims, init_feat, feat_dims)
+        elif self.grid_type == 'DEdgeCN':
+            return DEdgeCNMultiGrid(voxel_dims, init_feat, feat_dims)
         #elif self.grid_type == 'TensoRF_VM':
         #    return TensorVMEncoding(128, 11, smoothstep=True)
 
@@ -398,13 +406,17 @@ class Runner:
             on_trace_ready=torch.profiler.tensorboard_trace_handler(tb_dir),
             record_shapes=True, profile_memory=True, with_stack=True)
         self.update_learning_rate()
-        res_step = self.end_iter - self.iter_step
-        image_perm = self.get_image_perm()
+        res_step = int(self.end_iter - self.iter_step)
+        image_perm = self.get_image_perm(self.sequential_training)
+        img_iters = res_step // len(image_perm)
         # self.profile.start()
         for iter_i in tqdm(range(res_step)):
             # Deform
             if self.use_deform:
-                image_idx = image_perm[self.iter_step % len(image_perm)]
+                if self.sequential_training:
+                    image_idx = image_perm[self.iter_step // img_iters]
+                else:
+                    image_idx = image_perm[self.iter_step % len(image_perm)]
                 # Deform
                 deform_code = self.deform_codes[image_idx][None, ...]
                 log_qua = self.log_qua[image_idx][None, ...] if self.use_global_rigid else None
@@ -416,7 +428,8 @@ class Runner:
                     #self.validate_all_mesh()
 
                 if iter_i in self.pg_scale:
-                    self.upscale_feature_grid(self.feat_scale)
+                    with torch.no_grad():
+                        self.upscale_feature_grid(self.feat_scale)
                     self.update_and_create_optimizer()
 
                 # Deptdeviation_networkh
@@ -624,7 +637,7 @@ class Runner:
 
                 self.update_learning_rate()
 
-                if self.iter_step % len(image_perm) == 0:
+                if self.iter_step % len(image_perm) == 0 and not self.sequential_training:
                     image_perm = self.get_image_perm()
 
             else:
@@ -702,7 +715,7 @@ class Runner:
 
                 self.update_learning_rate()
 
-                if self.iter_step % len(image_perm) == 0:
+                if self.iter_step % len(image_perm) == 0 and not self.sequestial_training:
                     image_perm = self.get_image_perm()
 
             # self.profile.step()
@@ -723,8 +736,11 @@ class Runner:
 
         return deform_temporal_loss, deform_code_loss, app_temporal_loss, app_code_loss
 
-    def get_image_perm(self):
-        return torch.randperm(self.dataset.n_loaded_images)
+    def get_image_perm(self, sequential=False):
+        if sequential:
+            return torch.arange(self.dataset.n_loaded_images)
+        else:
+            return torch.randperm(self.dataset.n_loaded_images)
 
     def get_cos_anneal_ratio(self):
         if self.anneal_end == 0.0:
@@ -1007,7 +1023,8 @@ class Runner:
                                                                        alpha_ratio=max(
                                                                            min(self.iter_step / self.max_pe_iter, 1.),
                                                                            0.),
-                                                                       log_qua=log_qua)
+                                                                       log_qua=log_qua,
+                                                                       iter_step=self.iter_step)
 
             out_rgb_fine.append(color_batch.detach().cpu().numpy())
             out_normal_fine.append(gradients_batch.detach().cpu().numpy())
@@ -1109,7 +1126,7 @@ class Runner:
         vertices, triangles = \
             self.renderer.extract_observation_geometry(deform_code, bound_min, bound_max, resolution=resolution,
                                                        threshold=threshold,
-                                                       alpha_ratio=max(min(self.iter_step / self.max_pe_iter, 1.), 0.),
+                                                       alpha_ratio=1.0,  #max(min(self.iter_step / self.max_pe_iter, 1.), 0.),
                                                        log_qua=log_qua)
         os.makedirs(os.path.join(self.base_exp_dir, filename), exist_ok=True)
 
@@ -1128,12 +1145,28 @@ class Runner:
             self.validate_observation_mesh(image_idx, world_space, resolution, threshold, 'validations_meshes')
             print('Used GPU:', self.gpu)
 
+    def generate_videos(self, filename='meshes', normals_filename='validations_normals',
+                        rgb_filename='validations_rgbs', depth_filename='validations_depths'):
+        rgb_path = os.path.join(self.base_exp_dir, rgb_filename)
+        meshes_path = os.path.join(self.base_exp_dir, filename)
+        temp_path = os.path.join(self.base_exp_dir, 'temp')
+        output_path = os.path.join(self.base_exp_dir, 'videos')
+        output_path += '/mesh_rgb.mp4'
+
+        os.makedirs(temp_path, exist_ok=True)
+        os.makedirs(output_path, exist_ok=True)
+        #generate_video(output_path, meshes_path, rgb_path, temp_path)
+
 
 config_paths = ["./confs/ddeform", "./confs/killfusion"]
-config_names = ['seq004_grid_local.yaml', 'frog_grid_local.yaml', 'seq004_grid.yaml', 'seq004_grid_faster.yaml',
-                'seq004_grid_ffaster.yaml', 'seq011_grid.yaml', 'seq004_dog_grid.yaml', 'seq004_grid_abl.yaml']
-#'frog_grid_jade.yaml'  #'frog_grid_priyor_fast.yaml'  #'frog_grid_priyor.yaml'#'seq011_grid_old.yaml'  #'seq004_dog_grid_old.yaml'  #
-@hydra.main(config_path=config_paths[0], config_name=config_names[-1])
+#config_names = ['seq004_grid_local.yaml', 'frog_grid_local.yaml', 'seq004_grid.yaml', 'seq004_grid_faster.yaml',
+#                'seq004_grid_ffaster.yaml', 'seq011_grid.yaml', 'seq004_dog_grid.yaml', 'seq004_grid_abl.yaml',
+#                'seq014_grid.yaml', 'seq016_grid.yaml', 'seq026_b1_grid.yaml',
+#                'alex_grid.yaml', 'hat_grid.yaml', 'frog_grid_jade.yaml']
+
+config_names = ['seq004_grid.yaml', 'seq011_grid.yaml',  'seq026_b6_grid.yaml',
+                'alex_grid.yaml', 'hat_grid.yaml', 'frog_grid_jade.yaml', 'frog_grid_priyor2.yaml']
+@hydra.main(config_path=config_paths[1], config_name=config_names[-1])
 def main(cfg):
     #cfg = eval_str_num(cfg)
 
@@ -1147,8 +1180,10 @@ def main(cfg):
     torch.set_default_dtype(torch.float32)
     torch.cuda.set_device(0)
     mpek = cfg.train.max_pe_iter//1000
-    model_name = f'{cfg.case}_mpe{mpek}k_smooth{cfg.train.smooth_weight}_std{cfg.train.smooth_std}_lattemp{cfg.train.temp_weight}' \
-                 f'fs{cfg.train.fs_weight}_normal_l1{cfg.train.normal_l1_weight}_cos{cfg.train.normal_cos_weight}'
+    model_name = f'{cfg.case}_grid{cfg.model.feature_grid.type}_mpe{mpek}k_smooth{cfg.train.smooth_weight}_std{cfg.train.smooth_std}' \
+                 f'_topo{cfg.train.use_topo}'
+                 #f'_lattemp{cfg.train.temp_weight}' \
+                 #f'fs{cfg.train.fs_weight}_normal_l1{cfg.train.normal_l1_weight}_cos{cfg.train.normal_cos_weight}'
 
     runner = Runner(cfg, cfg.mode, model_name, cfg.is_continue)
 
@@ -1158,17 +1193,21 @@ def main(cfg):
         if runner.use_deform:
             runner.validate_all_mesh(world_space=False, resolution=512, threshold=cfg.mcube_threshold)
             runner.validate_all_image(resolution_level=1)
+            runner.generate_videos()
         else:
             runner.validate_mesh(world_space=False, resolution=512, threshold=cfg.mcube_threshold)
             runner.validate_all_image(resolution_level=1)
+            runner.generate_videos()
     elif cfg.mode == 'train_valid':
         runner.train()
         if runner.use_deform:
             runner.validate_all_mesh(world_space=False, resolution=512, threshold=cfg.mcube_threshold)
             runner.validate_all_image(resolution_level=1)
+            runner.generate_videos()
         else:
             runner.validate_mesh(world_space=False, resolution=512, threshold=cfg.mcube_threshold)
             runner.validate_all_image(resolution_level=1)
+            runner.generate_videos()
 
 
 if __name__ == '__main__':

@@ -189,7 +189,7 @@ class DeformGoSRenderer:
         return z_samples
 
     def cat_z_vals(self, deform_code, rays_o, rays_d, z_vals, new_z_vals, sdf, last=False,
-                   alpha_ratio=0.0, volume_origin=None, volume_dim=None, feature_grid=None, log_qua=None):
+                   alpha_ratio=0.0, volume_origin=None, volume_dim=None, feature_grid=None, log_qua=None, iter_step=0):
         batch_size, n_samples = z_vals.shape
         _, n_importance = new_z_vals.shape
         z_vals = torch.cat([z_vals, new_z_vals], dim=-1)
@@ -200,7 +200,7 @@ class DeformGoSRenderer:
             pts = pts.reshape(-1, 3)
             # Deform
             pts_canonical = self.deform_network(deform_code, pts, alpha_ratio, log_qua)
-            ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio)
+            ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio, iter_step=iter_step)
             #new_sdf = self.sdf_network.sdf(pts_canonical, ambient_coord, alpha_ratio).reshape(batch_size, n_importance)
             new_sdf, *_ = qp_to_sdf(pts_canonical, volume_origin, volume_dim, feature_grid,
                                     self.sdf_network, hyper_embed=ambient_coord, rgb_dim=self.rgb_dim)
@@ -235,7 +235,8 @@ class DeformGoSRenderer:
                     truncation=0.08,
                     back_truncation=0.01,
                     log_qua=None,
-                    gt_normals=None):
+                    gt_normals=None,
+                    iter_step=0,):
         batch_size, n_samples = z_vals.shape
 
         # Section length
@@ -253,7 +254,7 @@ class DeformGoSRenderer:
         # Deform
         # observation space -> canonical space
         pts_canonical = deform_network(deform_code, pts, alpha_ratio, log_qua)
-        ambient_coord = ambient_network(deform_code, pts, alpha_ratio)
+        ambient_coord = ambient_network(deform_code, pts, alpha_ratio, iter_step=iter_step)
         # sdf_nn_output = sdf_network(pts_canonical, ambient_coord, alpha_ratio)
         # TODO: without alpha_ratio for now
         sdf, feature_vector, _ = qp_to_sdf(pts_canonical, self.volume_origin, self.volume_dim, self.feature_grid,
@@ -267,7 +268,7 @@ class DeformGoSRenderer:
                      alpha_ratio=None, volume_origin=None, volume_dim=None, feature_grid=None, rgb_dim=6, log_qua=None):
             x.requires_grad_(True)
             x_c = deform_network(deform_code, x, alpha_ratio, log_qua)
-            amb_coord = ambient_network(deform_code, x, alpha_ratio)
+            amb_coord = ambient_network(deform_code, x, alpha_ratio, iter_step=iter_step)
             # y = sdf_network.sdf(x_c, amb_coord, alpha_ratio)
             y, *_ = qp_to_sdf(x_c, volume_origin, volume_dim, feature_grid, sdf_network, hyper_embed=amb_coord,
                               rgb_dim=rgb_dim)
@@ -447,7 +448,7 @@ class DeformGoSRenderer:
                 pts = pts.reshape(-1, 3)
                 # Deform
                 pts_canonical = self.deform_network(deform_code, pts, alpha_ratio, log_qua)
-                ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio)
+                ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio, iter_step=iter_step)
                 # sdf = self.sdf_network.sdf(pts_canonical, ambient_coord, alpha_ratio).reshape(batch_size, self.n_samples)
                 sdf, *_ = qp_to_sdf(pts_canonical, self.volume_origin, self.volume_dim, self.feature_grid,
                                     self.sdf_network, hyper_embed=ambient_coord, rgb_dim=self.rgb_dim)
@@ -471,7 +472,8 @@ class DeformGoSRenderer:
                                                   volume_origin=self.volume_origin,
                                                   volume_dim=self.volume_dim,
                                                   feature_grid=self.feature_grid,
-                                                  log_qua=log_qua)
+                                                  log_qua=log_qua,
+                                                  iter_step=iter_step)
 
             n_samples = self.n_samples + self.n_importance
 
@@ -493,7 +495,8 @@ class DeformGoSRenderer:
                                     truncation=truncation,
                                     back_truncation=back_truncation,
                                     log_qua=log_qua,
-                                    gt_normals=gt_normals)
+                                    gt_normals=gt_normals,
+                                    iter_step=iter_step)
 
         weights = ret_fine['weights']
         s_val = ret_fine['s_val'].reshape(batch_size, n_samples).mean(dim=-1, keepdim=True)
@@ -530,11 +533,12 @@ class DeformGoSRenderer:
                       rays_d,
                       rays_s,
                       alpha_ratio=0.,
-                      log_qua=None):
+                      log_qua=None,
+                      iter_step=0,):
         pts = rays_o + rays_s  # n_rays, 3
 
         pts_canonical = self.deform_network(deform_code, pts, alpha_ratio, log_qua)
-        ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio)
+        ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio, iter_step=iter_step)
         #f eature_vector = self.sdf_network(pts_canonical, ambient_coord, alpha_ratio)[:, 1:]
         _, feature_vector, _ = qp_to_sdf(pts_canonical, self.volume_origin, self.volume_dim, self.feature_grid,
                                 self.sdf_network, hyper_embed=ambient_coord, rgb_dim=self.rgb_dim)
@@ -544,7 +548,7 @@ class DeformGoSRenderer:
                      alpha_ratio=None, volume_origin=None, volume_dim=None, feature_grid=None, rgb_dim=6, log_qua=None):
             x.requires_grad_(True)
             x_c = deform_network(deform_code, x, alpha_ratio, log_qua)
-            amb_coord = ambient_network(deform_code, x, alpha_ratio)
+            amb_coord = ambient_network(deform_code, x, alpha_ratio, iter_step=iter_step)
             # y = sdf_network.sdf(x_c, amb_coord, alpha_ratio)
             y, *_ = qp_to_sdf(x_c, volume_origin, volume_dim, feature_grid, sdf_network, hyper_embed=amb_coord,
                               rgb_dim=rgb_dim)
@@ -608,7 +612,7 @@ class DeformGoSRenderer:
                      smooth_std=0.01):
         pts = rays_o + rays_s
         pts_canonical = self.deform_network(deform_code, pts, alpha_ratio, log_qua)
-        ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio)
+        ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio, iter_step=iter_step)
         if iter_step % self.report_freq == 0:
             pts_back = self.deform_network.inverse(deform_code, pts_canonical, alpha_ratio, log_qua)
         # sdf = self.sdf_network(pts_canonical, ambient_coord, alpha_ratio)[:, :1]
@@ -620,7 +624,7 @@ class DeformGoSRenderer:
                          alpha_ratio=None, volume_origin=None, volume_dim=None, feature_grid=None, rgb_dim=6, log_qua=None):
             x.requires_grad_(True)
             x_c = deform_network(deform_code, x, alpha_ratio, log_qua)
-            amb_coord = ambient_network(deform_code, x, alpha_ratio)
+            amb_coord = ambient_network(deform_code, x, alpha_ratio, iter_step=iter_step)
             # y = sdf_network.sdf(x_c, amb_coord, alpha_ratio)
             y, *_ = qp_to_sdf(x_c, volume_origin, volume_dim, feature_grid, sdf_network, hyper_embed=amb_coord,
                               rgb_dim=rgb_dim)
@@ -687,7 +691,8 @@ class DeformGoSRenderer:
                                                                    self.volume_origin, self.volume_dim,
                                                                    self.feature_grid, self.sdf_network,
                                                                    hyper_embed=self.ambient_network(deform_code, pts,
-                                                                                                    alpha_ratio),
+                                                                                                    alpha_ratio,
+                                                                                                    iter_step=80000),
                                                                    rgb_dim=self.rgb_dim)[0])
         # query_func=lambda pts: -self.sdf_network.sdf(self.deform_network(deform_code, pts,
         #                            alpha_ratio), self.ambient_network(deform_code, pts,
@@ -887,7 +892,8 @@ class NeuSRenderer:
                                                   z_vals,
                                                   new_z_vals,
                                                   sdf,
-                                                  last=(i + 1 == self.up_sample_steps))
+                                                  last=(i + 1 == self.up_sample_steps),
+                                                  iter_steps=80000)
 
             n_samples = self.n_samples + self.n_importance
 
