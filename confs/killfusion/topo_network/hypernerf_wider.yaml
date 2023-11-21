@@ -8,6 +8,4 @@ skip_in: [5]
 multires: 6
 bias: 0.0
 weight_norm: True
-use_topo: ${train.use_topo} #True
-total_iters: ${train.end_iter} #80000
-pg_scale: [0, 1] #${model.feature_grid.pg_scale} #[30000, 60000]
+use_topo: True

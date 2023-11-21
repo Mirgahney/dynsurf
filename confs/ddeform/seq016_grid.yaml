@@ -9,12 +9,12 @@ master_add: 'localhost'
 master_port: '12355'
 mode: 'train_valid' #'train'
 is_continue: False
-case: ddeform_seq011_grid_jade_80k_res34_ctfGvol1_glow_neus_rep3_3_app_10.0rgb1.0_geo0.1_PseudoNormal_NDRrgb #_topowarmup #_sequential_train #_2ks #_BiletDepth #CosAnnsmoothstep7_fastcode4k
+case: ddeform_seq016_grid_jade_80k_res34_ctfvol1_se3_neus_rep3_3_app_rgb1.0_geo0.5_PseudoNormal_NDRrgb #_BiletDepth #CosAnnsmoothstep7_fastcode4k
 mcube_threshold: 0.0
 
 general:
     base_dir: /jmain02/home/J2AD021/dxt03/mmm91-dxt03/Projects/NRGSurf
-    base_exp_dir: /exp_extra/
+    base_exp_dir: /exp/
     recording: [
         '',
         'models',
@@ -22,7 +22,7 @@ general:
     ]
 
 dataset:
-    data_dir: /jmain02/home/J2AD021/dxt03/mmm91-dxt03/data/DeepDeform/seq011 # ./datasets/CASE_NAME/
+    data_dir: /jmain02/home/J2AD021/dxt03/mmm91-dxt03/data/DeepDeform/seq016 # ./datasets/CASE_NAME/
     render_cameras_name: cameras_sphere.npz
     object_cameras_name: cameras_sphere.npz
     # Camera
@@ -31,7 +31,7 @@ dataset:
     # Depth
     use_depth: True
     # Predicted depth anf normals
-    use_pred_depth: False
+    use_pred_depth: True #False
     # scale factor of depth
     # e.g. a pixel value of 1000 in the depth image corresponds to a distance of 1 meter from the camera.
     depth_scale: 1000.
@@ -50,7 +50,7 @@ train:
     learning_rate: 5e-4
     learning_rate_alpha: 0.05
     end_iter: 80000 #80000 #120000
-    batch_size: 1024 #2048 #4096  #
+    batch_size: 1024 #4096  # 2048
     validate_resolution_level: 4
     warm_up_end: 5000
     anneal_end: 0
@@ -61,16 +61,16 @@ train:
     angle_weight: 0.0 #0.5
     depth_only: False
     # scales. step function scale weights
-    rgb_scale: [10.0, 1.0, 1.0] #[0.1, 1.0, 1.0] #
-    geo_scale: [10.0, 1.0, 0.1] #[10.0, 1.0, 0.1] #
+    rgb_scale: [0.1, 1.0, 1.0] #[0.1, 1.0, 1.0] #
+    geo_scale: [10.0, 1.0, 0.5] #[10.0, 1.0, 0.1] #
     regular_scale: [10.0, 10.0, 1.0] #[10.0, 10.0, 1.0]
     # our losses
     sdf_weight: 0.5
     fs_weight: 2.0
     surf_sdf: 0.0
-    smooth_weight: 0.01 #1.0
+    smooth_weight: 1.0
     smooth_eta: 0.01
-    smooth_std: 0.001 #0.01
+    smooth_std: 0.01
     smooth_tail: True
     tv_weight: 0.0 #10.0 #200.0 #1000.0 #500.0 #1.0 #100.0 #10.0
     akap_weight: 0.0
@@ -87,7 +87,7 @@ train:
     use_pts: True
     bij_type: ndr
     # Anneal. Coarse-to-Fine Optimization.
-    max_pe_iter: 10000.0 #70000
+    max_pe_iter: 70000 #10000 #70000
 
     save_freq: 10000
     val_freq: 10000
@@ -128,7 +128,7 @@ model:
         perturb: 1.0
 
 defaults:
-    - deformation_network: glow #se3 #bijective #
+    - deformation_network: se3 #bijective #
     - topo_network: hypernerf
     - sdf_network: mini
     - rendering_network: mini_ndr

@@ -1,5 +1,5 @@
 _target_: models.fields.AppearanceNetwork
-d_feature: 6 #256
+d_feature: 6 #8 #6 #256
 d_global_feature: 64
 mode: idr
 d_in: 9

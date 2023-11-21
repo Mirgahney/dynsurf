@@ -9,12 +9,12 @@ master_add: 'localhost'
 master_port: '12355'
 mode: 'train_valid' #'train'
 is_continue: False
-case: kfusion_frog_grid_pryor_60k_res34_ctfvol1_bij_neus_mpe50k_smoothstep3_rep3_depthloss_only_scaleloss #_NoRGBLoss
+case: kfusion_frog_grid_60k_res34_ctfvol1_se3_neus_smoothstep3_NoTopowarmup_10rgb0.5_depth0.5 #depthloss_only_scaleloss #_NoRGBLoss
 mcube_threshold: 0.0
 
 general:
     base_dir: /jmain02/home/J2AD021/dxt03/mmm91-dxt03/Projects/NRGSurf
-    base_exp_dir: /exp/
+    base_exp_dir: /exp_extra/
     recording: [
         '',
         'models',
@@ -31,10 +31,12 @@ dataset:
     # Depth
     use_depth: True
     # Predicted depth anf normals
-    use_pred_depth: True #False #
+    use_pred_depth: False #
     # scale factor of depth
     # e.g. a pixel value of 1000 in the depth image corresponds to a distance of 1 meter from the camera.
     depth_scale: 1000.
+    # Use bilateral smoothness on depth maps
+    bilateral_depth: False
     # Camera
     camera_trainable: True
     # Train skip
@@ -59,15 +61,17 @@ train:
     angle_weight: 0.0 #0.5
     depth_only: True
     # scales. step function scale weights
-    rgb_scale: [0.1, 1.0, 0.5] #[1.0, 1.0, 1.0] #
-    geo_scale: [10.0, 1.0, 0.5] #[1.0, 1.0, 1.0] #
+    rgb_scale: [10.0, 1.0, 0.5] #[1.0, 1.0, 1.0] #[0.1, 1.0, 0.5] #[1.0, 1.0, 1.0] #
+    geo_scale: [10.0, 1.0, 0.5] #[10.0, 1.0, 0.5] #[1.0, 1.0, 1.0] #
     regular_scale: [10.0, 10.0, 1.0] #[1.0, 1.0, 1.0] #
     # our losses
     sdf_weight: 0.5
     fs_weight: 2.0
     surf_sdf: 0.0
-    smooth_weight: 1.0
-    smooth_std: 0.01
+    smooth_weight: 0.01
+    smooth_eta: 0.01
+    smooth_std: 0.015
+    smooth_tail: True
     tv_weight: 0.0 #10.0 #200.0 #1000.0 #500.0 #1.0 #100.0 #10.0
     akap_weight: 0.0
     latent_weight: 0.0
@@ -79,11 +83,11 @@ train:
     use_topo: True
     use_bijective: True
     use_global_rigid: False
-    use_app: False #True
-    use_pts: False #True
+    use_app: True
+    use_pts: True
     bij_type: ndr
     # Anneal. Coarse-to-Fine Optimization.
-    max_pe_iter: 50000 #70000 #70000
+    max_pe_iter: 50000 #10000 #70000 #70000
 
     save_freq: 10000
     val_freq: 10000
@@ -104,32 +108,6 @@ test:
 
 
 model:
-    # Deform
-    deform_network:
-        d_feature: 64
-        d_in: 3
-        d_out_1: 1 # t
-        d_out_2: 3 # (r,t) in 2d
-        n_blocks: 3
-        d_hidden: 128
-        n_layers: 1
-        skip_in: []
-        multires: 6
-        weight_norm: True
-
-    # Deform
-    topo_network:
-        d_feature: 64
-        d_in: 3
-        d_out: 2
-        d_hidden: 64
-        n_layers: 7
-        skip_in: [5]
-        multires: 6
-        bias: 0.0
-        weight_norm: True
-        use_topo: True
-
     feature_grid:
         feat_dims: [32] #[14, 12, 6] #rep4  #[14, 8, 4] #rep3 ##[10, 4, 4]
         res: 34 #34 #134 #124 #149
@@ -138,46 +116,8 @@ model:
         feat_scale: [2] #[2] #[2, 1.2, 1]
         type: normal #['normal', 'Gaussian', 'MLP', 'AmbMLP', 'AmbMLPB', 'TensoRF_VM']
 
-    sdf_network:
-        d_out: 257
-        d_in_1: 26 #26 #20 #12 #3
-        d_in_2: 2 # use_topo dim
-        d_hidden: 32 #256
-        n_layers: 2 #8
-        skip_in: [] #[4]
-        multires: 0 #6
-        multires_topo: 1 # use_topo
-        bias: 0.5
-        scale: 1.0
-        geometric_init: True
-        weight_norm: False #True
-
     variance_network:
         init_val: 0.3
-
-    rendering_network:
-        d_feature: 32 #256
-        mode: idr
-        d_in: 6 #9
-        d_out: 3
-        d_hidden: 32 #256
-        n_layers: 2 #4
-        weight_norm: False #True
-        multires_view: 0 #4
-        squeeze_out: True
-
-    # Deform
-    appearance_rendering_network:
-        d_feature: 256
-        d_global_feature: 64
-        mode: idr
-        d_in: 9
-        d_out: 3
-        d_hidden: 256
-        n_layers: 4
-        weight_norm: True
-        multires_view: 4
-        squeeze_out: True
 
     neus_renderer:
         begin_n_samples: 64
@@ -188,8 +128,8 @@ model:
         perturb: 1.0
 
 defaults:
-    - deformation_network: bijective
+    - deformation_network: se3 #glow #se3 #bijective
     - topo_network: hypernerf
     - sdf_network: mini
-    - rendering_network: mini #_ndr
+    - rendering_network: mini_ndr
     #- override hydra/launcher: submitit_slurm #joblib

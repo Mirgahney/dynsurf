@@ -1,6 +1,6 @@
 _target_: models.fields.GeometryNet
 d_out: 257
-d_in_1: 26 #27 #26 #26 #20 #12 #3
+d_in_1: 26 #32 #27 #26 #26 #20 #12 #3
 d_in_2: 2 # use_topo dim
 d_hidden: 32 #256
 n_layers: 2 #8
@@ -11,3 +11,4 @@ bias: 0.5
 scale: 1.0
 geometric_init: True
 weight_norm: False #True
+use_topo: ${train.use_topo} #True

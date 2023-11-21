@@ -9,7 +9,7 @@ master_add: 'localhost'
 master_port: '12355'
 mode: 'train_valid' #'train'
 is_continue: False
-case: ddeform_seq004_grid_10k_res34_ctfvol1_bij_neus_rep3_3_app_rgb1.0_geo1.0_mpe5k_PredNormDepthNorm2_SSIdepthloss2_ndrRend_sdfloss #NormalsOnly #_scaleloss10.0
+case: ddeform_seq004_grid_10k_res34_ctfvol1_se3_neus_rep3_3_app_rgb1.0_geo1.0_mpe5k_pseudoNorm_ndrRend #_sdfloss #NormalsOnly #_scaleloss10.0
 mcube_threshold: 0.0
 
 general:
@@ -50,7 +50,7 @@ train:
     learning_rate: 5e-4
     learning_rate_alpha: 0.05
     end_iter: 10000 #60000 #80000 #120000
-    batch_size: 512 #1024 # 2048
+    batch_size: 1024 # 2048
     validate_resolution_level: 4
     warm_up_end: 250 #5000
     anneal_end: 0
@@ -128,7 +128,7 @@ model:
         perturb: 1.0
 
 defaults:
-    - deformation_network: bijective
+    - deformation_network: se3 #bijective
     - topo_network: hypernerf
     - sdf_network: mini
     - rendering_network: mini #_ndr

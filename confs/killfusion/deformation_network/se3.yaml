@@ -4,8 +4,8 @@ d_in: 3
 d_out_1: 1 # t
 d_out_2: 3 # (r,t) in 2d
 n_blocks: 3
-d_hidden: 128 #512 #128
+d_hidden: 128
 n_layers: 1
 skip_in: [4]
-multires: 6 #8 #6
+multires: 6
 weight_norm: True

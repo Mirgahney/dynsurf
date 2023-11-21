@@ -1,0 +1,12 @@
+_target_: models.fields.GlowDeformNetwork
+d_feature: 64 #128 #(rep3_2) #64
+d_in: 3
+d_out_1: 1 # t
+d_out_2: 3 # (r,t) in 2d
+n_blocks: 3
+d_hidden: 128
+n_layers: 1
+skip_in: []
+multires: 6
+weight_norm: True
+LU_decomposed: False
