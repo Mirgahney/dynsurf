@@ -54,6 +54,11 @@ Clone this repository and create the environment (please notice CUDA version)
 ```shell
 git clone https://github.com/Mirgahney/dysurf.git
 cd dysurf
+```
+
+The code is tested with Python 3.9 and PyTorch 1.11 with CUDA 11.3. GO-Surf requires [smooth_sampler](https://github.com/tymoteuszb/smooth-sampler), which is a drop-in replacement for PyTorch's grid sampler that support double back-propagation. Also the following packages are required:
+
+```shell
 conda env create -f dysurf.yml
 conda activate dysurf
 ```
@@ -61,12 +66,20 @@ conda activate dysurf
 <details>
   <summary> Dependencies (click to expand) </summary>
 
-  - torch==1.8.0
-  - opencv_python==4.5.2.52
-  - trimesh==3.9.8 
-  - numpy==1.21.2
-  - scipy==1.7.0
-  - PyMCubes==0.1.2
+  * torch==1.11
+  * pytorch3d
+  * scikit-image
+  * open3d
+  * imageio
+  * matplotlib
+  * configargparse
+  * tensorboard
+  * opencv-contrib-python
+  * opencv_python==4.5.2.52
+  * trimesh==3.9.8 
+  * numpy==1.21.2
+  * scipy==1.7.0
+  * PyMCubes==0.1.2
 
 </details>
 
