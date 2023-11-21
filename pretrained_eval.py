@@ -21,6 +21,6 @@ casename='kfusion_duck'
 os.system('python -u exp_runner.py --mode validate_pretrained --conf ./confs/{} --is_continue --case {} --gpu {}'.format(confname,casename,gpuname))
 
 # KillingFusion Duck
-confname='kfusion_snoopy.conf'
+confname='snoopy_ndr.conf'
 casename='kfusion_snoopy'
 os.system('python -u exp_runner.py --mode validate_pretrained --conf ./confs/{} --is_continue --case {} --gpu {}'.format(confname,casename,gpuname))

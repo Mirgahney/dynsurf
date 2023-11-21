@@ -1,0 +1,13 @@
+_target_: models.fields.GeometryNet
+d_out: 257
+d_in_1: 26 #42 #34 #26 #32 #(rep3_21) #26 #20 #12 #3
+d_in_2: 8 #16 #(rep3_3) #32 #(rep3_4) #8 #(rep3_21) #2 # use_topo dim
+d_hidden: 64 #32 #256
+n_layers: 2 #8
+skip_in: [] #[4]
+multires: 0 #6
+multires_topo: 1 # use_topo
+bias: 0.5
+scale: 1.0
+geometric_init: True
+weight_norm: False #True

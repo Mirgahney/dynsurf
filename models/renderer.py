@@ -4,9 +4,8 @@ import numpy as np
 import mcubes
 
 
-
 def extract_fields(bound_min, bound_max, resolution, query_func):
-    N = 128 # 64. Change it when memory is insufficient!
+    N = 128  # 64. Change it when memory is insufficient!
     X = torch.linspace(bound_min[0], bound_max[0], resolution).split(N)
     Y = torch.linspace(bound_min[1], bound_max[1], resolution).split(N)
     Z = torch.linspace(bound_min[2], bound_max[2], resolution).split(N)
@@ -37,7 +36,7 @@ def extract_geometry(bound_min, bound_max, resolution, threshold, query_func):
 def sample_pdf(bins, weights, n_samples, det=False):
     # This implementation is built upon NeRF
     # Get pdf
-    weights = weights + 1e-5 # prevent nans
+    weights = weights + 1e-5  # prevent nans
     pdf = weights / torch.sum(weights, -1, keepdim=True)
     cdf = torch.cumsum(pdf, -1)
     cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1)
@@ -53,7 +52,7 @@ def sample_pdf(bins, weights, n_samples, det=False):
     inds = torch.searchsorted(cdf, u, right=True)
     below = torch.max(torch.zeros_like(inds - 1), inds - 1)
     above = torch.min((cdf.shape[-1] - 1) * torch.ones_like(inds), inds)
-    inds_g = torch.stack([below, above], -1) # (batch, N_samples, 2)
+    inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
 
     matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
     cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
@@ -72,7 +71,7 @@ class DeformNeuSRenderer:
     def __init__(self,
                  report_freq,
                  deform_network,
-                 ambient_network,
+                 ambient_network,  # topological network
                  sdf_network,
                  deviation_network,
                  color_network,
@@ -98,11 +97,9 @@ class DeformNeuSRenderer:
         self.perturb = perturb
         self.report_freq = report_freq
 
-
     def update_samples_num(self, iter_step, alpha_ratio=0.):
         if iter_step >= self.important_begin_iter:
-            self.n_samples = int(self.begin_n_samples*(1-alpha_ratio)+self.end_n_samples*alpha_ratio)
-
+            self.n_samples = int(self.begin_n_samples * (1 - alpha_ratio) + self.end_n_samples * alpha_ratio)
 
     def up_sample(self, rays_o, rays_d, z_vals, sdf, n_importance, inv_s):
         """
@@ -150,9 +147,8 @@ class DeformNeuSRenderer:
         z_samples = sample_pdf(z_vals, weights, n_importance, det=True).detach()
         return z_samples
 
-
     def cat_z_vals(self, deform_code, rays_o, rays_d, z_vals, new_z_vals, sdf, last=False,
-                alpha_ratio=0.0):
+                   alpha_ratio=0.0):
         batch_size, n_samples = z_vals.shape
         _, n_importance = new_z_vals.shape
         z_vals = torch.cat([z_vals, new_z_vals], dim=-1)
@@ -164,6 +160,7 @@ class DeformNeuSRenderer:
             # Deform
             pts_canonical = self.deform_network(deform_code, pts, alpha_ratio)
             ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio)
+            # TODO: modify the sdf net in case the ambient_coord is None to not use it
             new_sdf = self.sdf_network.sdf(pts_canonical, ambient_coord, alpha_ratio).reshape(batch_size, n_importance)
             sdf = torch.cat([sdf, new_sdf], dim=-1)
             xx = torch.arange(batch_size)[:, None].expand(batch_size, n_samples + n_importance).reshape(-1)
@@ -171,7 +168,6 @@ class DeformNeuSRenderer:
             sdf = sdf[(xx, index)].reshape(batch_size, n_samples + n_importance)
 
         return z_vals, sdf
-
 
     def render_core(self,
                     deform_code,
@@ -196,7 +192,7 @@ class DeformNeuSRenderer:
 
         # Section midpoints
         pts = rays_o[:, None, :] + rays_d[:, None, :] * mid_z_vals[..., :, None]  # n_rays, n_samples, 3
-        dirs_o = rays_d[:, None, :].expand(pts.shape) # view in observation space
+        dirs_o = rays_d[:, None, :].expand(pts.shape)  # view in observation space
 
         pts = pts.reshape(-1, 3)
         dirs_o = dirs_o.reshape(-1, 3)
@@ -205,20 +201,22 @@ class DeformNeuSRenderer:
         # observation space -> canonical space
         pts_canonical = deform_network(deform_code, pts, alpha_ratio)
         ambient_coord = ambient_network(deform_code, pts, alpha_ratio)
+        # TODO: modify the sdf network not to use the ambient_coord in case it is None
         sdf_nn_output = sdf_network(pts_canonical, ambient_coord, alpha_ratio)
         sdf = sdf_nn_output[:, :1]
         feature_vector = sdf_nn_output[:, 1:]
 
         # Deform, gradients in observation space
-        def gradient(deform_network=None, ambient_network=None, sdf_network=None, deform_code=None, x=None, alpha_ratio=None):
+        def gradient(deform_network=None, ambient_network=None, sdf_network=None, deform_code=None, x=None,
+                     alpha_ratio=None):
             x.requires_grad_(True)
             x_c = deform_network(deform_code, x, alpha_ratio)
             amb_coord = ambient_network(deform_code, x, alpha_ratio)
             y = sdf_network.sdf(x_c, amb_coord, alpha_ratio)
-            
+
             # gradient on observation
             d_output = torch.ones_like(y, requires_grad=False, device=y.device)
-            gradient_o =  torch.autograd.grad(
+            gradient_o = torch.autograd.grad(
                 outputs=y,
                 inputs=x,
                 grad_outputs=d_output,
@@ -252,23 +250,24 @@ class DeformNeuSRenderer:
                 create_graph=True,
                 retain_graph=True,
                 only_inputs=True)[0].unsqueeze(1)
-            gradient_pts =  torch.cat([grad_0, grad_1, grad_2], dim=1) # (batch_size, dim_out, dim_in)
+            gradient_pts = torch.cat([grad_0, grad_1, grad_2], dim=1)  # (batch_size, dim_out, dim_in)
 
             return gradient_o, gradient_pts
 
         # Deform
         # observation space -> canonical space
-        gradients_o, pts_jacobian = gradient(deform_network, ambient_network, sdf_network, deform_code, pts, alpha_ratio)
-        dirs_c = torch.bmm(pts_jacobian, dirs_o.unsqueeze(-1)).squeeze(-1) # view in observation space
+        gradients_o, pts_jacobian = gradient(deform_network, ambient_network, sdf_network, deform_code, pts,
+                                             alpha_ratio)
+        dirs_c = torch.bmm(pts_jacobian, dirs_o.unsqueeze(-1)).squeeze(-1)  # view in observation space
         dirs_c = dirs_c / torch.linalg.norm(dirs_c, ord=2, dim=-1, keepdim=True)
-        
+
         sampled_color = color_network(appearance_code, pts_canonical, gradients_o, \
-            dirs_c, feature_vector, alpha_ratio).reshape(batch_size, n_samples, 3)
+                                      dirs_c, feature_vector, alpha_ratio).reshape(batch_size, n_samples, 3)
 
         inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)
         inv_s = inv_s.expand(batch_size * n_samples, 1)
 
-        true_cos = (dirs_o * gradients_o).sum(-1, keepdim=True) # observation
+        true_cos = (dirs_o * gradients_o).sum(-1, keepdim=True)  # observation
 
         # "cos_anneal_ratio" grows from 0 to 1 in the beginning training iterations. The anneal strategy below makes
         # the cos value "not dead" at the beginning training iterations, for better convergence.
@@ -301,7 +300,7 @@ class DeformNeuSRenderer:
 
         # Eikonal loss, observation + canonical
         gradient_o_error = (torch.linalg.norm(gradients_o.reshape(batch_size, n_samples, 3), ord=2,
-                                            dim=-1) - 1.0) ** 2
+                                              dim=-1) - 1.0) ** 2
         relax_inside_sphere_sum = relax_inside_sphere.sum() + 1e-5
         gradient_o_error = (relax_inside_sphere * gradient_o_error).sum() / relax_inside_sphere_sum
 
@@ -323,12 +322,11 @@ class DeformNeuSRenderer:
             'depth_map': depth_map
         }
 
-
     def render(self, deform_code, appearance_code, rays_o, rays_d, near, far, perturb_overwrite=-1,
-            cos_anneal_ratio=0.0, alpha_ratio=0., iter_step=0):
+               cos_anneal_ratio=0.0, alpha_ratio=0., iter_step=0):
         self.update_samples_num(iter_step, alpha_ratio)
         batch_size = len(rays_o)
-        sample_dist = 2.0 / self.n_samples # Assuming the region of interest is a unit sphere
+        sample_dist = 2.0 / self.n_samples  # Assuming the region of interest is a unit sphere
         z_vals = torch.linspace(0.0, 1.0, self.n_samples)
         z_vals = near + (far - near) * z_vals[None, :]
 
@@ -349,7 +347,9 @@ class DeformNeuSRenderer:
                 # Deform
                 pts_canonical = self.deform_network(deform_code, pts, alpha_ratio)
                 ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio)
-                sdf = self.sdf_network.sdf(pts_canonical, ambient_coord, alpha_ratio).reshape(batch_size, self.n_samples)
+                # TODO: modify the sdf net in case the ambient_coord is None to not use it
+                sdf = self.sdf_network.sdf(pts_canonical, ambient_coord, alpha_ratio).reshape(batch_size,
+                                                                                              self.n_samples)
 
                 for i in range(self.up_sample_steps):
                     new_z_vals = self.up_sample(rays_o,
@@ -357,7 +357,7 @@ class DeformNeuSRenderer:
                                                 z_vals,
                                                 sdf,
                                                 self.n_importance // self.up_sample_steps,
-                                                64 * 2**i)
+                                                64 * 2 ** i)
                     z_vals, sdf = self.cat_z_vals(deform_code,
                                                   rays_o,
                                                   rays_d,
@@ -403,31 +403,33 @@ class DeformNeuSRenderer:
             'depth_map': ret_fine['depth_map']
         }
 
-
     # Depth
     def renderondepth(self,
-                    deform_code,
-                    appearance_code,
-                    rays_o,
-                    rays_d,
-                    rays_s,
-                    alpha_ratio=0.):
-        pts = rays_o + rays_s # n_rays, 3
+                      deform_code,
+                      appearance_code,
+                      rays_o,
+                      rays_d,
+                      rays_s,
+                      alpha_ratio=0.):
+        pts = rays_o + rays_s  # n_rays, 3
 
         pts_canonical = self.deform_network(deform_code, pts, alpha_ratio)
         ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio)
+        # TODO: modify the sdf network not to use the ambient_coord in case it is None
         feature_vector = self.sdf_network(pts_canonical, ambient_coord, alpha_ratio)[:, 1:]
 
         # Deform, gradients in observation space
-        def gradient(deform_network=None, ambient_network=None, sdf_network=None, deform_code=None, x=None, alpha_ratio=None):
+        def gradient(deform_network=None, ambient_network=None, sdf_network=None, deform_code=None, x=None,
+                     alpha_ratio=None):
             x.requires_grad_(True)
             x_c = deform_network(deform_code, x, alpha_ratio)
             amb_coord = ambient_network(deform_code, x, alpha_ratio)
+            # TODO: modify the sdf network not to use the ambient_coord in case it is None
             y = sdf_network.sdf(x_c, amb_coord, alpha_ratio)
-            
+
             # gradient on observation
             d_output = torch.ones_like(y, requires_grad=False, device=y.device)
-            gradient_o =  torch.autograd.grad(
+            gradient_o = torch.autograd.grad(
                 outputs=y,
                 inputs=x,
                 grad_outputs=d_output,
@@ -461,37 +463,42 @@ class DeformNeuSRenderer:
                 create_graph=True,
                 retain_graph=True,
                 only_inputs=True)[0].unsqueeze(1)
-            gradient_pts =  torch.cat([grad_0, grad_1, grad_2], dim=1) # (batch_size, dim_out, dim_in)
+            gradient_pts = torch.cat([grad_0, grad_1, grad_2], dim=1)  # (batch_size, dim_out, dim_in)
 
             return gradient_o, gradient_pts
 
-        gradients_o, pts_jacobian = gradient(self.deform_network, self.ambient_network, self.sdf_network, deform_code, pts, alpha_ratio)
-        dirs_c = torch.bmm(pts_jacobian, rays_d.unsqueeze(-1)).squeeze(-1) # view in observation space
+        # TODO: modify the gradient func not to use the ambient_coord in case it is None
+        gradients_o, pts_jacobian = gradient(self.deform_network, self.ambient_network, self.sdf_network, deform_code,
+                                             pts, alpha_ratio)
+        dirs_c = torch.bmm(pts_jacobian, rays_d.unsqueeze(-1)).squeeze(-1)  # view in observation space
         dirs_c = dirs_c / torch.linalg.norm(dirs_c, ord=2, dim=-1, keepdim=True)
         color = self.color_network(appearance_code, pts_canonical, gradients_o, \
-            dirs_c, feature_vector, alpha_ratio)
+                                   dirs_c, feature_vector, alpha_ratio)
 
         return color, gradients_o
 
-
     # Depth
     def errorondepth(self, deform_code, rays_o, rays_d, rays_s, mask, alpha_ratio=0., iter_step=0):
-        pts = rays_o + rays_s  # surface_pts  [bs, 3]
+        pts = rays_o + rays_s
         pts_canonical = self.deform_network(deform_code, pts, alpha_ratio)
         ambient_coord = self.ambient_network(deform_code, pts, alpha_ratio)
         if iter_step % self.report_freq == 0:
             pts_back = self.deform_network.inverse(deform_code, pts_canonical, alpha_ratio)
+        # TODO: modify the sdf network not to use the ambient_coord in case it is None
         sdf = self.sdf_network(pts_canonical, ambient_coord, alpha_ratio)[:, :1]
+
         # Deform, gradients in observation space
-        def gradient_obs(deform_network=None, ambient_network=None, sdf_network=None, deform_code=None, x=None, alpha_ratio=None):
+        def gradient_obs(deform_network=None, ambient_network=None, sdf_network=None, deform_code=None, x=None,
+                         alpha_ratio=None):
             x.requires_grad_(True)
             x_c = deform_network(deform_code, x, alpha_ratio)
             amb_coord = ambient_network(deform_code, x, alpha_ratio)
+            # TODO: modify the sdf network not to use the ambient_coord in case it is None
             y = sdf_network.sdf(x_c, amb_coord, alpha_ratio)
-            
+
             # gradient on observation
             d_output = torch.ones_like(y, requires_grad=False, device=y.device)
-            gradient_o =  torch.autograd.grad(
+            gradient_o = torch.autograd.grad(
                 outputs=y,
                 inputs=x,
                 grad_outputs=d_output,
@@ -501,24 +508,24 @@ class DeformNeuSRenderer:
 
             return gradient_o
 
+        # TODO: modify gradient obs not to use the ambient_coord in case it is None
         gradient_o = gradient_obs(self.deform_network, self.ambient_network, self.sdf_network,
-                                    deform_code, pts, alpha_ratio)
+                                  deform_code, pts, alpha_ratio)
         true_cos = (rays_d * gradient_o).sum(-1, keepdim=True)
         relu_cos = F.relu(true_cos)
         pts = pts.detach()
         pts_norm = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=True)
         # Denoise. not use: out of mask or sphere
-        inside_masksphere = (pts_norm < 1.0).to(self.dtype) * mask # inside_sphere * mask
+        inside_masksphere = (pts_norm < 1.0).to(self.dtype) * mask  # inside_sphere * mask
         sdf = inside_masksphere * sdf
         inside_masksphere_sum = inside_masksphere.sum() + 1e-5
         sdf_error = F.l1_loss(sdf, torch.zeros_like(sdf), reduction='sum') / inside_masksphere_sum
         angle_error = F.l1_loss(relu_cos, torch.zeros_like(relu_cos), reduction='sum') / inside_masksphere_sum
 
         if iter_step % self.report_freq == 0:
-            print('Invertibility evaluation: ', torch.abs((pts_back-pts)*inside_masksphere).max().data.item())
+            print('Invertibility evaluation: ', torch.abs((pts_back - pts) * inside_masksphere).max().data.item())
 
         return sdf_error, angle_error, inside_masksphere
-
 
     def extract_canonical_geometry(self, bound_min, bound_max, resolution, threshold=0.0, alpha_ratio=0.0):
         return extract_geometry(bound_min,
@@ -527,15 +534,18 @@ class DeformNeuSRenderer:
                                 threshold=threshold,
                                 query_func=lambda pts: -self.sdf_network.sdf(pts, alpha_ratio))
 
-    
-    def extract_observation_geometry(self, deform_code, bound_min, bound_max, resolution, threshold=0.0, alpha_ratio=0.0):
+    def extract_observation_geometry(self, deform_code, bound_min, bound_max, resolution, threshold=0.0,
+                                     alpha_ratio=0.0):
+        # TODO: modify sdf net not to use the ambient_coord in case it is None
         return extract_geometry(bound_min,
                                 bound_max,
                                 resolution=resolution,
                                 threshold=threshold,
                                 query_func=lambda pts: -self.sdf_network.sdf(self.deform_network(deform_code, pts,
-                                                            alpha_ratio), self.ambient_network(deform_code, pts,
-                                                            alpha_ratio), alpha_ratio))
+                                                                                                 alpha_ratio),
+                                                                             self.ambient_network(deform_code, pts,
+                                                                                                  alpha_ratio),
+                                                                             alpha_ratio))
 
 
 class NeuSRenderer:
@@ -555,13 +565,12 @@ class NeuSRenderer:
         self.up_sample_steps = up_sample_steps
         self.perturb = perturb
 
-
     def up_sample(self, rays_o, rays_d, z_vals, sdf, n_importance, inv_s):
         """
         Up sampling give a fixed inv_s
         """
         batch_size, n_samples = z_vals.shape
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None] # n_rays, n_samples, 3
+        pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]  # n_rays, n_samples, 3
         radius = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=False)
         inside_sphere = (radius[:, :-1] < 1.0) | (radius[:, 1:] < 1.0)
         sdf = sdf.reshape(batch_size, n_samples)
@@ -602,7 +611,6 @@ class NeuSRenderer:
         z_samples = sample_pdf(z_vals, weights, n_importance, det=True).detach()
         return z_samples
 
-
     def cat_z_vals(self, rays_o, rays_d, z_vals, new_z_vals, sdf, last=False):
         batch_size, n_samples = z_vals.shape
         _, n_importance = new_z_vals.shape
@@ -618,7 +626,6 @@ class NeuSRenderer:
             sdf = sdf[(xx, index)].reshape(batch_size, n_samples + n_importance)
 
         return z_vals, sdf
-
 
     def render_core(self,
                     rays_o,
@@ -637,7 +644,7 @@ class NeuSRenderer:
         mid_z_vals = z_vals + dists * 0.5
 
         # Section midpoints
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * mid_z_vals[..., :, None] # n_rays, n_samples, 3
+        pts = rays_o[:, None, :] + rays_d[:, None, :] * mid_z_vals[..., :, None]  # n_rays, n_samples, 3
         dirs = rays_d[:, None, :].expand(pts.shape)
 
         pts = pts.reshape(-1, 3)
@@ -658,7 +665,7 @@ class NeuSRenderer:
         # "cos_anneal_ratio" grows from 0 to 1 in the beginning training iterations. The anneal strategy below makes
         # the cos value "not dead" at the beginning training iterations, for better convergence.
         iter_cos = -(F.relu(-true_cos * 0.5 + 0.5) * (1.0 - cos_anneal_ratio) +
-                     F.relu(-true_cos) * cos_anneal_ratio) # always non-positive
+                     F.relu(-true_cos) * cos_anneal_ratio)  # always non-positive
 
         # Estimate signed distances at section points
         estimated_next_sdf = sdf + iter_cos * dists.reshape(-1, 1) * 0.5
@@ -699,10 +706,9 @@ class NeuSRenderer:
             'inside_sphere': inside_sphere
         }
 
-
     def render(self, rays_o, rays_d, near, far, perturb_overwrite=-1, cos_anneal_ratio=0.0):
         batch_size = len(rays_o)
-        sample_dist = 2.0 / self.n_samples # Assuming the region of interest is a unit sphere
+        sample_dist = 2.0 / self.n_samples  # Assuming the region of interest is a unit sphere
         z_vals = torch.linspace(0.0, 1.0, self.n_samples)
         z_vals = near + (far - near) * z_vals[None, :]
 
@@ -729,7 +735,7 @@ class NeuSRenderer:
                                                 z_vals,
                                                 sdf,
                                                 self.n_importance // self.up_sample_steps,
-                                                64 * 2**i)
+                                                64 * 2 ** i)
                     z_vals, sdf = self.cat_z_vals(rays_o,
                                                   rays_d,
                                                   z_vals,
@@ -766,7 +772,6 @@ class NeuSRenderer:
             'gradient_error': ret_fine['gradient_error'],
             'inside_sphere': ret_fine['inside_sphere']
         }
-
 
     def extract_geometry(self, bound_min, bound_max, resolution, threshold=0.0):
         return extract_geometry(bound_min,

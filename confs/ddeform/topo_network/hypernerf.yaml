@@ -1,0 +1,13 @@
+_target_: models.fields.TopoNetwork
+d_feature: 64 #128 #(rep3_2) #64
+d_in: 3
+d_out: 8 #16 #(rep3_3) #32 #(rep3_4) #8 #(rep3_21) #2
+d_hidden: 64
+n_layers: 7
+skip_in: [5]
+multires: 6
+bias: 0.0
+weight_norm: True
+use_topo: ${train.use_topo} #True
+total_iters: ${train.end_iter} #80000
+pg_scale: [0, 1] #${model.feature_grid.pg_scale} #[30000, 60000]
