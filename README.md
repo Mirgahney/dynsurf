@@ -2,36 +2,22 @@
 
   <h1 align="center">Neural Surface Reconstruction of Dynamic Scenes with Monocular RGB-D Camera</h1>
   <p align="center">
-    <a href="https://rainbowrui.github.io/">Hongrui Cai</a>
+    <a href="https://mirgahney.github.io/">Mirgahney Mohamed</a>
     ·
-    <a href="https://github.com/WanquanF">Wanquan Feng</a>
-    ·
-    <a href="https://scholar.google.com/citations?hl=en&user=5G-2EFcAAAAJ">Xuetao Feng</a>
-    ·
-    Yan Wang
-    ·
-    <a href="http://staff.ustc.edu.cn/~juyong/">Juyong Zhang</a>
-
+    Lourdes Agapito
   </p>
-  <h2 align="center">NeurIPS 2022</h2>
-  <h3 align="center"><a href="https://arxiv.org/pdf/2206.15258.pdf">Paper</a> | <a href="https://ustc3dv.github.io/ndr/">Project Page</a> | <a href="https://rainbowrui.github.io/data/NDR_poster.pdf">Poster</a></h3>
+  <h2 align="center">3DV 2024</h2>
+  <h3 align="center"><a href="https://arxiv.org/abs/2311.08159">Paper</a> | <a href="https://mirgahney.github.io//DynamicSurf.io/">Project Page</a> | <a href="">Poster</a></h3>
   <div align="center"></div>
-</p>
 
 <p align="center">
   <a href="">
-    <img src="./exhibition/teaser.gif" alt="Logo" width="90%">
+    <img src="./exhibition/teaser_v4.png" alt="Logo" width="80%">
   </a>
 </p>
 
 <p align="center">
-  <a href="">
-    <img src="./exhibition/teaser.png" alt="Logo" width="80%">
-  </a>
-</p>
-
-<p align="center">
-We propose Neural-DynamicReconstruction (NDR), a <b>template-free</b> method to recover high-fidelity geometry, motions and appearance of a <b>dynamic</b> scene from a <b>monocular</b> RGB-D camera.
+We propose DynamicSurf, a model-free neural implicit surface reconstruction method for high-fidelity 3D modelling of <b>non-rigid surfaces</b> from <b>monocular</b> RGB-D video.
 </p>
 <br>
 
@@ -66,10 +52,10 @@ You can download a part of pre-processed [KillingFusion](https://campar.in.tum.d
 ### Setup
 Clone this repository and create the environment (please notice CUDA version)
 ```shell
-git clone https://github.com/USTC3DV/NDR-code.git
-cd NDR-code
-conda env create -f environment.yml
-conda activate ndr
+git clone https://github.com/Mirgahney/dysurf.git
+cd dysurf
+conda env create -f dysurf.yml
+conda activate dysurf
 ```
 
 <details>
@@ -91,6 +77,8 @@ python train_eval.py
 ```
 
 - **Evaluating pre-trained model**
+Coming Soon
+
 ```shell
 python pretrained_eval.py
 ```
@@ -99,6 +87,8 @@ python pretrained_eval.py
 Coming Soon
 
 ### Geometric Projection
+Coming Soon
+<!---
 - **Compiling renderer**
 ```shell
 cd renderer && bash build.sh && cd ..
@@ -111,35 +101,36 @@ Input path of original data, path of results, and iteration number, e.g.
 python geo_render.py ./datasets/kfusion_frog/ ./exp/kfusion_frog/result/ 120000
 ```
 The rendered results will be put in dir ```[path_of_results]/validations_geo/```
-
+-->
 
 ## Todo List
 - [ ] More Pre-processed Data
 - [ ] Code of Data Pre-processing
-- [x] Code of Geometric Projection
-- [x] Pre-trained Models and Evaluation Code
+- [ ] Code of Geometric Projection
+- [ ] Pre-trained Models and Evaluation Code
 - [x] Training Code
 
 
 
 ## Acknowledgements
-This project is built upon [NeuS](https://github.com/Totoro97/NeuS). Some code snippets are also borrowed from [IDR](https://github.com/lioryariv/idr) and [NeRF-pytorch](https://github.com/yenchenlin/nerf-pytorch). The pre-processing code for camera pose initialization is borrowed from [Fast-Robust-ICP](https://github.com/yaoyx689/Fast-Robust-ICP). The evaluation code for geometry rendering is borrowed from [StereoPIFu_Code](https://github.com/CrisHY1995/StereoPIFu_Code). Thanks for these great projects. We thank all the authors for their great work and repos.
-
+This project is built upon [NDR](), [Go-Surf](), and [NeuS](https://github.com/Totoro97/NeuS). Some code snippets are also borrowed from [IDR](https://github.com/lioryariv/idr) and [NeRF-pytorch](https://github.com/yenchenlin/nerf-pytorch). The pre-processing code for camera pose initialization is borrowed from [Fast-Robust-ICP](https://github.com/yaoyx689/Fast-Robust-ICP). The evaluation code for geometry rendering is borrowed from [StereoPIFu_Code](https://github.com/CrisHY1995/StereoPIFu_Code). Thanks for these great projects. We thank all the authors for their great work and repos.
 
 
 ## Contact
-If you have questions, please contact [Hongrui Cai](https://rainbowrui.github.io/).
+If you have questions, please contact [Mirgahney Mohamed](https://mirgahney.github.io/).
 
 
 
 ## Citation
 If you find our code or paper useful, please cite
 ```bibtex
-@inproceedings{Cai2022NDR,
-  author    = {Hongrui Cai and Wanquan Feng and Xuetao Feng and Yan Wang and Juyong Zhang},
-  title     = {Neural Surface Reconstruction of Dynamic Scenes with Monocular RGB-D Camera},
-  booktitle = {Thirty-sixth Conference on Neural Information Processing Systems (NeurIPS)},
-  year      = {2022}
+@misc{mohamed2023dynamicsurf,
+      title={DynamicSurf: Dynamic Neural RGB-D Surface Reconstruction with an Optimizable Feature Grid},
+      author={Mirgahney Mohamed and Lourdes Agapito},
+      year={2023},
+      eprint={2311.08159},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
 }
 ```
 
