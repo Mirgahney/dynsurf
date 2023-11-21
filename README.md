@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="">
-    <img src="./exhibition/teaser.png" alt="Logo" width="90%">
+    <img src="./exhibition/teaser.png" alt="Logo" width="100%">
   </a>
 </p>
 
@@ -73,15 +73,17 @@ conda activate dysurf
 ### Running
 - **Training**
 ```shell
-python train_eval.py
+python3 -W ignore exp_runner_grid_hydra.py 
 ```
 
 - **Evaluating pre-trained model**
-Coming Soon
 
+    Coming Soon
+<!---
 ```shell
 python pretrained_eval.py
 ```
+-->
 
 ### Data Pre-processing
 Coming Soon
@@ -104,7 +106,6 @@ The rendered results will be put in dir ```[path_of_results]/validations_geo/```
 -->
 
 ## Todo List
-- [ ] More Pre-processed Data
 - [ ] Code of Data Pre-processing
 - [ ] Code of Geometric Projection
 - [ ] Pre-trained Models and Evaluation Code
@@ -113,12 +114,11 @@ The rendered results will be put in dir ```[path_of_results]/validations_geo/```
 
 
 ## Acknowledgements
-This project is built upon [NDR](), [Go-Surf](), and [NeuS](https://github.com/Totoro97/NeuS). Some code snippets are also borrowed from [IDR](https://github.com/lioryariv/idr) and [NeRF-pytorch](https://github.com/yenchenlin/nerf-pytorch). The pre-processing code for camera pose initialization is borrowed from [Fast-Robust-ICP](https://github.com/yaoyx689/Fast-Robust-ICP). The evaluation code for geometry rendering is borrowed from [StereoPIFu_Code](https://github.com/CrisHY1995/StereoPIFu_Code). Thanks for these great projects. We thank all the authors for their great work and repos.
+This project is built upon [NDR](https://github.com/USTC3DV/NDR-code.git), [Go-Surf](https://github.com/JingwenWang95/go-surf), and [NeuS](https://github.com/Totoro97/NeuS). Some code snippets are also borrowed from [IDR](https://github.com/lioryariv/idr) and [NeRF-pytorch](https://github.com/yenchenlin/nerf-pytorch). The pre-processing code for camera pose initialization is borrowed from [Fast-Robust-ICP](https://github.com/yaoyx689/Fast-Robust-ICP). The evaluation code for geometry rendering is borrowed from [StereoPIFu_Code](https://github.com/CrisHY1995/StereoPIFu_Code). Thanks for these great projects. We thank all the authors for their great work and repos.
 
 
 ## Contact
 If you have questions, please contact [Mirgahney Mohamed](https://mirgahney.github.io/).
-
 
 
 ## Citation
