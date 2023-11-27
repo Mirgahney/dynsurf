@@ -56,7 +56,7 @@ git clone https://github.com/Mirgahney/dysurf.git
 cd dysurf
 ```
 
-The code is tested with Python 3.9 and PyTorch 1.11 with CUDA 11.3. GO-Surf requires [smooth_sampler](https://github.com/tymoteuszb/smooth-sampler), which is a drop-in replacement for PyTorch's grid sampler that support double back-propagation. Also the following packages are required:
+The code is tested with Python 3.9 and PyTorch 1.11 with CUDA 11.3. DynamicSurf requires [smooth_sampler](https://github.com/tymoteuszb/smooth-sampler), which is a drop-in replacement for PyTorch's grid sampler that support double back-propagation. Also the following packages are required:
 
 ```shell
 conda env create -f dysurf.yml
